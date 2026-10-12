@@ -1,0 +1,25 @@
+# ===== 环境与密钥（绝不入库） =====
+.env
+config/settings.json
+config/targets.json
+
+# ===== 录制数据（弹幕/弱标签含用户言论，本地留存） =====
+data/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# ===== 编辑器 / 系统 =====
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

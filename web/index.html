@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>弹幕墙 · B站直播弹幕录制器</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📼</text></svg>">
+</head>
+<body>
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">弹</div>
+      <div class="brand-text">
+        <div class="brand-name">弹幕墙</div>
+        <div class="brand-sub">Danmaku Recorder</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="nav-item active" data-view="dashboard">
+        <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+        <span>仪表盘</span>
+      </a>
+      <a class="nav-item" data-view="stream">
+        <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM7 9h10v2H7V9zm6 5H7v-2h6v2zm4-6H7V6h10v2z"/></svg>
+        <span>实时弹幕</span>
+        <em class="nav-badge" id="streamBadge" hidden>0</em>
+      </a>
+      <a class="nav-item" data-view="rooms">
+        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9 14l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        <span>房间管理</span>
+      </a>
+      <a class="nav-item" data-view="files">
+        <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+        <span>录制文件</span>
+      </a>
+      <a class="nav-item" data-view="logs">
+        <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-10 12H6v-2h4v2zm6-4H6v-2h10v2zm2-4H6V6h12v2z"/></svg>
+        <span>运行日志</span>
+      </a>
+      <a class="nav-item" data-view="settings">
+        <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>设置</span>
+      </a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="ws-dot" id="wsDot" title="实时连接状态"></div>
+      <span id="wsText">连接中…</span>
+      <span class="version">v1.0.0</span>
+    </div>
+  </aside>
+
+  <!-- 主区域 -->
+  <main class="main">
+    <header class="topbar">
+      <h1 id="pageTitle">仪表盘</h1>
+      <div class="topbar-right">
+        <span class="global-pill" id="globalPill">
+          <i class="dot"></i><span id="globalPillText">未在录制</span>
+        </span>
+        <button class="btn btn-ghost" id="btnStopAll">■ 全部停止</button>
+        <button class="btn btn-primary" id="btnStartAll">● 全部开始</button>
+      </div>
+    </header>
+
+    <!-- 仪表盘 -->
+    <section class="view active" id="view-dashboard">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-label">在录房间</div>
+          <div class="stat-value" id="statRunning">0</div>
+          <div class="stat-foot"><span id="statLive">0</span> 个直播中</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">WS 连接</div>
+          <div class="stat-value" id="statConnected">0</div>
+          <div class="stat-foot">弹幕服务器在线</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">本次弹幕</div>
+          <div class="stat-value" id="statDanmaku">0</div>
+          <div class="stat-foot"><span id="statSC">0</span> SC · <span id="statMod">0</span> 房管处置</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">实时速率</div>
+          <div class="stat-value"><span id="statRate">0</span><small> 条/分</small></div>
+          <div class="stat-foot">全部房间合计</div>
+        </div>
+      </div>
+      <div class="section-head">
+        <h2>房间状态</h2>
+      </div>
+      <div class="room-grid" id="roomGrid"></div>
+      <div class="empty" id="dashboardEmpty" hidden>
+        <div class="empty-icon">📡</div>
+        <p>还没有录制目标</p>
+        <button class="btn btn-primary" data-goto="rooms">去添加直播间</button>
+      </div>
+    </section>
+
+    <!-- 实时弹幕 -->
+    <section class="view" id="view-stream">
+      <div class="toolbar">
+        <select id="streamRoom" class="select"><option value="">全部房间</option></select>
+        <label class="chip-check"><input type="checkbox" value="danmaku" checked> 弹幕</label>
+        <label class="chip-check"><input type="checkbox" value="super_chat" checked> SC</label>
+        <label class="chip-check"><input type="checkbox" value="gift" checked> 礼物</label>
+        <label class="chip-check"><input type="checkbox" value="moderation" checked> 房管处置</label>
+        <span class="toolbar-spacer"></span>
+        <label class="chip-check"><input type="checkbox" id="streamPause"> 暂停滚动</label>
+        <button class="btn btn-sm" id="streamClear">清空</button>
+      </div>
+      <div class="stream-list" id="streamList">
+        <div class="stream-hint">等待弹幕到达… 弹幕将实时显示在这里（仅保留最近 500 条）</div>
+      </div>
+    </section>
+
+    <!-- 房间管理 -->
+    <section class="view" id="view-rooms">
+      <div class="panel">
+        <div class="panel-title">添加直播间</div>
+        <div class="add-row">
+          <input class="input" id="addRoomId" type="number" min="1" placeholder="直播间号（URL 中的数字）">
+          <input class="input" id="addVup" type="text" placeholder="保存目录名 / 主播名（可留空自动命名）">
+          <label class="switch-line">
+            <span>启用</span>
+            <input type="checkbox" id="addEnabled" checked>
+          </label>
+          <button class="btn btn-primary" id="btnAddRoom">添加并录制</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">录制目标 <span class="muted" id="roomCount"></span></div>
+        <table class="table">
+          <thead><tr>
+            <th style="width:90px">状态</th><th style="width:130px">房间号</th>
+            <th>名称 / 目录</th><th style="width:90px">启用</th>
+            <th style="width:110px">弹幕数</th><th style="width:190px">操作</th>
+          </tr></thead>
+          <tbody id="roomTable"></tbody>
+        </table>
+        <div class="empty soft" id="roomsEmpty" hidden>
+          <p>暂无目标，请在上方添加</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 录制文件 -->
+    <section class="view" id="view-files">
+      <div class="tabs">
+        <button class="tab active" data-kind="records">弹幕记录</button>
+        <button class="tab" data-kind="weak">房管处置弱标签</button>
+      </div>
+      <div class="panel">
+        <table class="table">
+          <thead><tr>
+            <th>主播目录</th><th>文件</th><th style="width:110px">大小</th>
+            <th style="width:140px">最后修改</th><th style="width:170px">操作</th>
+          </tr></thead>
+          <tbody id="filesTable"></tbody>
+        </table>
+        <div class="empty soft" id="filesEmpty" hidden>
+          <p>暂无录制文件（真实开播后才会落盘）</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 运行日志 -->
+    <section class="view" id="view-logs">
+      <div class="toolbar terminal-bar">
+        <label class="chip-check"><input type="checkbox" data-level="info" checked> INFO</label>
+        <label class="chip-check"><input type="checkbox" data-level="warning" checked> WARN</label>
+        <label class="chip-check"><input type="checkbox" data-level="error" checked> ERROR</label>
+        <span class="toolbar-spacer"></span>
+        <button class="btn btn-sm" id="logsClear">清空显示</button>
+      </div>
+      <div class="terminal" id="logTerminal"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="view" id="view-settings">
+      <div class="settings-grid">
+        <div class="panel">
+          <div class="panel-title">登录凭证</div>
+          <div class="form-row">
+            <label>SESSDATA Cookie <span class="tag" id="sessTag">未配置</span></label>
+            <div class="input-with-action">
+              <input class="input" id="setSess" type="password" autocomplete="off"
+                     placeholder="粘贴 SESSDATA 值；游客模式可留空但稳定性较差">
+              <button class="btn btn-sm" id="toggleSess" type="button">显示</button>
+            </div>
+            <div class="hint">
+              获取：浏览器登录 <b>live.bilibili.com</b> → F12 → Application → Cookies →
+              复制 <code>SESSDATA</code>。凭证仅保存在本机 <code>config/settings.json</code>，不会上传。
+            </div>
+          </div>
+          <div class="form-row">
+            <button class="btn" id="btnTestCookie">检测登录状态</button>
+            <span class="hint inline" id="cookieResult"></span>
+          </div>
+          <div class="form-row">
+            <label>匿名化盐（DANMAKU_ANON_SALT）</label>
+            <input class="input" id="setSalt" type="text" placeholder="跨文件保持一致即可">
+          </div>
+          <div class="form-row">
+            <label>数据保存目录</label>
+            <input class="input" id="setDataDir" type="text" placeholder="留空 = 程序目录下 data/">
+            <div class="hint">生效路径：<code id="dataDirEff">—</code></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">录制策略</div>
+          <div class="switch-row"><div><div class="sw-title">录制礼物事件</div>
+            <div class="hint">默认关闭，礼物对弹幕分析价值较低</div></div>
+            <input type="checkbox" id="swGifts"></div>
+          <div class="switch-row"><div><div class="sw-title">过滤纯表情弹幕</div>
+            <div class="hint">剥除 [表情] 后无文字的弹幕不落盘，文字+表情保留</div></div>
+            <input type="checkbox" id="swEmoticon" checked></div>
+          <div class="switch-row"><div><div class="sw-title">房管处置弱标签</div>
+            <div class="hint">房管拉黑/禁言时回捞该用户近 30 分钟弹幕</div></div>
+            <input type="checkbox" id="swModeration" checked></div>
+          <div class="switch-row"><div><div class="sw-title">uid 哈希匿名</div>
+            <div class="hint">uid 不落明文，用户名掩码（张***）</div></div>
+            <input type="checkbox" id="swAnon" checked></div>
+          <div class="switch-row"><div><div class="sw-title">文本隐私脱敏</div>
+            <div class="hint">链接 / @用户 / QQ / UID / 手机号自动替换</div></div>
+            <input type="checkbox" id="swSanitize" checked></div>
+          <div class="switch-row"><div><div class="sw-title">启动服务即自动录制</div>
+            <div class="hint">启动后自动连接所有「启用」的房间</div></div>
+            <input type="checkbox" id="swAutoStart" checked></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">调度参数</div>
+          <div class="form-row">
+            <label>未开播轮询间隔（秒，最小 10）</label>
+            <input class="input" id="setPoll" type="number" min="10" value="45">
+          </div>
+          <div class="form-row">
+            <label>全部关播后自动停止（分钟，0 = 不自动停止）</label>
+            <input class="input" id="setIdle" type="number" min="0" value="0">
+          </div>
+          <div class="form-row">
+            <button class="btn btn-primary" id="btnSaveSettings">保存设置</button>
+            <span class="hint inline" id="saveResult"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 文件预览弹窗 -->
+<div class="modal-mask" id="previewMask" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span id="previewTitle">文件预览</span>
+      <div>
+        <a class="btn btn-sm" id="previewDownload" download>下载</a>
+        <button class="btn btn-sm" id="previewClose">关闭</button>
+      </div>
+    </div>
+    <pre class="modal-body" id="previewBody"></pre>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+<script src="/app.js"></script>
+</body>
+</html>
