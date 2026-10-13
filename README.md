@@ -5,6 +5,9 @@
 一键生成一页 PNG 战报。Python 异步核心 + FastAPI + 原生 Web UI，
 **零前端构建步骤**，开箱即用。弹幕录制是本平台的能力之一。
 
+> 👈 普通成员无需拉代码：到 **[Releases](../../releases)** 下载 Windows 绿色版 zip，
+> 解压后双击 `LiveDataDeck.exe` 即可使用，详见下文「快速开始」。
+
 ## 功能特性
 
 - **多房间同时录制**：开播自动连接、下播立即断线释放账号并发名额；未开播不占连接（45s 轮询）
@@ -33,63 +36,35 @@
 > 人气值为 B 站加权人气指标，不等于真实在线人数；2026-10 前的历史录制文件无该字段，
 > 战报与分析会显示「无数据」，无法回填。
 
-## 新人上手指南
+## 快速开始（下载即用，推荐）
 
-### 1. 拉取代码（私有仓库）
+无需安装 Python 或任何环境，普通团队成员走这条路径：
 
-本仓库为团队私有项目，需先由管理员在 GitHub 仓库 **Settings → Collaborators** 邀请你的账号，
-接受邀请后用自己的 GitHub 凭证克隆：
+### 1. 下载绿色版
 
-```bash
-git clone https://github.com/white8tterfly/live-data-deck.git
-cd live-data-deck
-```
+到本仓库 **[Releases](../../releases)** 页下载最新的
+`LiveDataDeck-x.y.z-windows-x64.zip`（仓库为私有，需先由管理员在
+**Settings → Collaborators** 邀请你的 GitHub 账号并接受邀请，登录后才能下载）。
 
-> Windows 首次推送/克隆若要求登录，使用你自己的 GitHub Personal Access Token（勾选 repo 权限）作为密码，
-> 不要使用别人的 token。
+支持 Windows 10/11 64 位。macOS / Linux 用户请见文末「源码运行」。
 
-### 2. 安装环境
+### 2. 解压
 
-需要 **Python 3.10+**（推荐 3.11）。建议使用虚拟环境：
-
-```bash
-# Windows (PowerShell)
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-# macOS / Linux
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-依赖只有 httpx / websockets / FastAPI / uvicorn / Pillow，无需 Node.js、无前端构建步骤。
+把压缩包完整解压到任意目录（如 `D:\LiveDataDeck\`），保持文件夹结构不变——
+`LiveDataDeck.exe` 必须和 `_internal` 文件夹在一起，**不要只拖出 exe**。
 
 ### 3. 启动
 
-```bash
-python run.py
-```
-
-启动后自动打开浏览器，地址 <http://127.0.0.1:8787>。常用参数：
-
-```bash
-python run.py --port 9000        # 换端口（默认 8787）
-python run.py --no-browser       # 不自动开浏览器（服务器场景）
-python run.py --host 0.0.0.0     # 监听局域网，团队其他人通过 http://你的IP:8787 访问
-```
-
-> **团队推荐部署方式**：选一台常开的机器（如团队服务器）执行
-> `python run.py --host 0.0.0.0 --no-browser` 常驻，成员直接用浏览器访问该地址
-> 查看仪表盘、做分析、出战报，不必每个人各跑一份（同一 SESSDATA 多实例同时连接会互相挤线）。
+双击 **`LiveDataDeck.exe`**，弹出的黑色控制台窗口是程序本体（关闭它=停止录制，可用 Ctrl+C 退出），
+约 1 秒后浏览器自动打开 <http://127.0.0.1:8787>；没有自动打开就手动输入该地址。
+包内附有一份《使用说明.txt》，面向非技术成员。
 
 ### 4. 首次配置（仅需一次）
 
 1. **填写登录凭证**：打开「**设置**」页，粘贴 `SESSDATA`（不填可走游客模式，但容易被边缘节点秒踢）。
    获取方式：浏览器登录 <https://live.bilibili.com> → F12 → Application（应用）→ Cookies
    → 找到 `SESSDATA`，复制其值粘贴保存，页内可一键检测登录态。
-2. **设置数据目录**（可选）：默认录制数据保存在项目内 `data/`；要换位置（如数据盘或团队约定目录）
+2. **设置数据目录**（可选）：默认录制数据保存在程序目录下 `data/`；要换位置（如数据盘）
    在设置页填写绝对路径即可。
 3. **打开礼物录制**（战报需要）：设置页打开「**录制礼物事件**」开关。
    不开启则后续战报只有 SC 营收、没有金礼物营收；开启前的历史文件无法补录。
@@ -97,8 +72,9 @@ python run.py --host 0.0.0.0     # 监听局域网，团队其他人通过 http:
    保存后立即开始轮询；主播开播即自动录制、下播自动断线。设置页「自动启动录制」开启时，
    以后每次启动程序都会自动连接所有启用的房间。
 
-> `SESSDATA` 只保存在运行机器本地的 `config/settings.json`（已被 .gitignore 排除，不会进仓库）。
-> 也可用 `.env` 文件配置（见 `.env.example`），环境变量优先级高于设置页。
+> 绿色版中 `SESSDATA` 只保存在程序目录下 `config/settings.json`，不会上传任何第三方；
+> 换机 / 升级时拷贝 `config/` 和 `data/` 两个文件夹即可完整迁移。
+> 如遇杀软误报，将程序目录加入信任区。
 
 ### 5. 日常使用
 
@@ -121,53 +97,49 @@ python run.py --host 0.0.0.0     # 监听局域网，团队其他人通过 http:
 - 总营收 = SC 金额 + 金礼物（金瓜子 ÷ 1000）；银瓜子免费礼物不计。
 - 「累计看过」需要设置页 SESSDATA 有效，程序会在线向 B 站接口补全；获取失败显示「—」，不影响出图。
 
-### 7. 命令行模式（无界面挂机）
+### 7. 进阶：启动参数与局域网共享
 
-不想开 Web 界面、或临时录一场时可用：
+在 exe 所在目录地址栏输入 `cmd` 回车，可带参数启动：
 
-```bash
-# 按 config/targets.json 录制（首次可从 config/targets.example.json 复制改，
-# 一般直接在 Web「房间管理」页维护即可，无需手改）
-python -m recorder.cli
-
-# 临时录制单个房间
-python -m recorder.cli --room 22637261
-
-# 录 1 小时后退出
-python -m recorder.cli --duration 3600
-
-# 全部房间关播 60 分钟后自动停止
-python -m recorder.cli --idle-stop 60
-
-# 同时录制礼物事件
-python -m recorder.cli --keep-gifts
+```bat
+LiveDataDeck.exe --port 9000        REM 换端口（默认 8787）
+LiveDataDeck.exe --no-browser       REM 不自动开浏览器（服务器挂机）
+LiveDataDeck.exe --host 0.0.0.0     REM 监听局域网，同事访问 http://你的IP:8787
 ```
+
+> **团队推荐部署方式**：选一台常开的电脑以 `--host 0.0.0.0 --no-browser` 常驻，
+> 其他成员直接浏览器访问该地址看仪表盘、做分析、出战报，不必每个人各跑一份
+> （同一 SESSDATA 多实例同时连接会互相挤线）。
+> 源码模式另有命令行无界面录制器 `python -m recorder.cli`，见文末。
 
 ### 8. 团队协作约定（重要）
 
-以下内容均已被 `.gitignore` 排除，**各自保存在本机、不要提交**：
+每个运行实例（绿色版为解压目录，源码运行为项目目录）中，以下内容只保存在本机、
+**不要外传、不要提交仓库**：
 
 - `config/settings.json`（含 SESSDATA、数据目录）、`config/targets.json`（房间列表）、`.env`
 - `data/` 整个数据目录（弹幕含用户言论，本地留存）
 
 需要注意：
 
-- 每人用**自己的 SESSDATA**，不要在群里/对话里传播 token 或 cookie；泄露后立即去 GitHub / B 站吊销。
-- `匿名盐`（`DANMAKU_ANON_SALT`）决定用户哈希：同一盐才能跨文件、跨机器关联同一观众。
+- 每人 / 每台机器用**自己的 SESSDATA**，不要在群里或对话里传播 cookie；泄露后立即去 B 站下线该会话。
+- `匿名盐`（设置页 / `DANMAKU_ANON_SALT`）决定用户哈希：同一盐才能跨文件、跨机器关联同一观众。
   团队做联合分析时应统一盐值（线下约定），改盐后新旧文件的用户将对不上。
-- 推荐只用一个常驻实例录制（见第 3 步），其他人通过局域网访问 Web；多实例同时用同一账号连接
-  会触发 B 站并发限制互相秒踢。
+- 推荐只用一个常驻实例录制（见第 7 步）；多实例同时用同一账号连接会触发 B 站并发限制互相秒踢。
 - 房间列表的增删建议由维护人统一在常驻实例的 Web 上操作。
 
 ### 9. 常见问题
 
-- **启动报端口被占用**：`python run.py --port 其他端口`。
+- **双击 exe 没反应 / 提示缺少 dll**：确认整个文件夹（含 `_internal`）一起解压了；杀软可能误报，
+  将程序目录加入信任区后重试。
+- **启动报端口被占用**：`LiveDataDeck.exe --port 9000`（绿色版）或 `python run.py --port 9000`（源码）。
 - **房间一直重连 / 秒踢**：多半是游客模式或账号同时在播房间过多。先在设置页填好 SESSDATA；
   单账号同时在播房间建议不超过 3–4 个，程序已内置节点轮换与熔断，仍不行就减少同时录制数。
 - **战报人气区显示无数据**：该文件录于人气采集上线前，属于正常现象。
 - **独立观众数偏小**：2026-10 之前的旧文件没有匿名 uid，只能按掩码昵称估算，会偏低。
-- **想开机自启 / 后台常驻**：Windows 可用计划任务执行 `python run.py --no-browser`，
-  Linux/macOS 可用 systemd / nohup / tmux。
+- **升级新版**：下载新 zip 解压到新目录，把旧目录的 `config/` 和 `data/` 拷过去即可。
+- **想开机自启 / 后台常驻**：Windows 可用「任务计划程序」在登录时执行
+  `LiveDataDeck.exe --no-browser`。
 
 ## Web 界面
 
@@ -219,9 +191,35 @@ python -m recorder.cli --keep-gifts
 - 录制内容请勿公开传播他人言论；默认开启的脱敏功能也不保证完全去除可识别信息
 - 使用本工具产生的一切后果由使用者自行承担
 
+## 源码运行与自行打包（维护者）
+
+绿色版仅提供 Windows x64。macOS / Linux 用户或想二次开发的成员从源码运行：
+
+```bash
+git clone https://github.com/white8tterfly/live-data-deck.git
+cd live-data-deck
+python -m venv .venv
+# Windows: .venv\Scripts\Activate.ps1    macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python run.py                  # Web 界面
+python -m recorder.cli --help  # 无界面命令行录制器（--room/--duration/--idle-stop/--keep-gifts）
+```
+
+发布 Windows 绿色版（在 Windows 机器上执行）：
+
+```bash
+pip install pyinstaller
+pyinstaller LiveDataDeck.spec --noconfirm --clean
+# 产物在 dist/LiveDataDeck/；组装发布目录时拷入 packaging/使用说明.txt 与空 config/、data/，
+# 切勿拷入本机 config/settings.json（含 SESSDATA）。
+```
+
+发布前必须实测：从 zip 解压后的目录直接启动 exe，访问首页与 `/api/state`，
+并用一条最小录制数据验证 `/api/report/image` 能正常出 PNG。
+
 ## 技术栈
 
-Python 3.10+ · asyncio · httpx · websockets · FastAPI · uvicorn · Pillow（PNG 战报渲染）· 原生 HTML/CSS/JS（无构建）
+Python 3.10+ · asyncio · httpx · websockets · FastAPI · uvicorn · Pillow（PNG 战报渲染）· PyInstaller（绿色版打包）· 原生 HTML/CSS/JS（无构建）
 
 ## License
 

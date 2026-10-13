@@ -6,13 +6,24 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+# 打包成绿色版（PyInstaller 冻结）后：
+#   ROOT_DIR      = exe 所在目录（可写，config/data/.env 都放这里，用户可见）
+#   RESOURCE_DIR  = sys._MEIPASS（只读，存放 web 静态资源）
+# 源码运行时两者都是项目根目录。
+if getattr(sys, "frozen", False):
+    ROOT_DIR = Path(sys.executable).resolve().parent
+    RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", ROOT_DIR))
+else:
+    ROOT_DIR = Path(__file__).resolve().parent.parent
+    RESOURCE_DIR = ROOT_DIR
+
 CONFIG_DIR = ROOT_DIR / "config"
-WEB_DIR = ROOT_DIR / "web"
+WEB_DIR = RESOURCE_DIR / "web"
 DEFAULT_DATA_DIR = ROOT_DIR / "data"
 
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
