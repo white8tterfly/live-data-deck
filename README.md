@@ -33,33 +33,101 @@
 > 人气值为 B 站加权人气指标，不等于真实在线人数；2026-10 前的历史录制文件无该字段，
 > 战报与分析会显示「无数据」，无法回填。
 
-## 快速开始
+## 新人上手指南
 
-需要 Python 3.10+。
+### 1. 拉取代码（私有仓库）
+
+本仓库为团队私有项目，需先由管理员在 GitHub 仓库 **Settings → Collaborators** 邀请你的账号，
+接受邀请后用自己的 GitHub 凭证克隆：
 
 ```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-
-# 2. 启动（自动打开浏览器 http://127.0.0.1:8787）
-python run.py
-#   指定端口 / 不自动开浏览器：
-python run.py --port 9000 --no-browser
+git clone https://github.com/white8tterfly/live-data-deck.git
+cd live-data-deck
 ```
 
-首次使用：
+> Windows 首次推送/克隆若要求登录，使用你自己的 GitHub Personal Access Token（勾选 repo 权限）作为密码，
+> 不要使用别人的 token。
 
-1. 打开「**设置**」页，粘贴 `SESSDATA`（推荐，游客模式可留空但容易被边缘节点秒踢）：
-   浏览器登录 <https://live.bilibili.com> → F12 → Application → Cookies → 复制 `SESSDATA`
-2. 在「**房间管理**」添加直播间号（直播间 URL 里的数字）和保存目录名，添加后自动开始录制
-3. 在「**仪表盘**」查看连接状态，「**实时弹幕**」查看实时流
+### 2. 安装环境
 
-> SESSDATA 只保存在本机 `config/settings.json`（已被 .gitignore 排除），不会上传到任何第三方。
-
-### 命令行模式
+需要 **Python 3.10+**（推荐 3.11）。建议使用虚拟环境：
 
 ```bash
-# 按 config/targets.json 录制（可从 config/targets.example.json 复制改）
+# Windows (PowerShell)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+依赖只有 httpx / websockets / FastAPI / uvicorn / Pillow，无需 Node.js、无前端构建步骤。
+
+### 3. 启动
+
+```bash
+python run.py
+```
+
+启动后自动打开浏览器，地址 <http://127.0.0.1:8787>。常用参数：
+
+```bash
+python run.py --port 9000        # 换端口（默认 8787）
+python run.py --no-browser       # 不自动开浏览器（服务器场景）
+python run.py --host 0.0.0.0     # 监听局域网，团队其他人通过 http://你的IP:8787 访问
+```
+
+> **团队推荐部署方式**：选一台常开的机器（如团队服务器）执行
+> `python run.py --host 0.0.0.0 --no-browser` 常驻，成员直接用浏览器访问该地址
+> 查看仪表盘、做分析、出战报，不必每个人各跑一份（同一 SESSDATA 多实例同时连接会互相挤线）。
+
+### 4. 首次配置（仅需一次）
+
+1. **填写登录凭证**：打开「**设置**」页，粘贴 `SESSDATA`（不填可走游客模式，但容易被边缘节点秒踢）。
+   获取方式：浏览器登录 <https://live.bilibili.com> → F12 → Application（应用）→ Cookies
+   → 找到 `SESSDATA`，复制其值粘贴保存，页内可一键检测登录态。
+2. **设置数据目录**（可选）：默认录制数据保存在项目内 `data/`；要换位置（如数据盘或团队约定目录）
+   在设置页填写绝对路径即可。
+3. **打开礼物录制**（战报需要）：设置页打开「**录制礼物事件**」开关。
+   不开启则后续战报只有 SC 营收、没有金礼物营收；开启前的历史文件无法补录。
+4. **添加直播间**：在「**房间管理**」添加房间号（直播间 URL 中的数字）和保存目录名（建议填主播名），
+   保存后立即开始轮询；主播开播即自动录制、下播自动断线。设置页「自动启动录制」开启时，
+   以后每次启动程序都会自动连接所有启用的房间。
+
+> `SESSDATA` 只保存在运行机器本地的 `config/settings.json`（已被 .gitignore 排除，不会进仓库）。
+> 也可用 `.env` 文件配置（见 `.env.example`），环境变量优先级高于设置页。
+
+### 5. 日常使用
+
+| 你想做的事 | 操作 |
+| --- | --- |
+| 看录制是否正常 / 当前人气 | 「仪表盘」看房间卡片状态徽章、标题、实时人气与历史峰值 |
+| 看实时弹幕 | 「实时弹幕」页，可按房间 / 类型过滤，SC / 礼物分色 |
+| 开播 / 停录某个房间 | 房间卡片或房间管理页的单个开始 / 停止按钮（即时生效，无需重启） |
+| **生成单场战报** | 「录制文件」→ 找到对应 `live_YYYYMMDD.jsonl` → 点「**战报**」→ 弹窗查看摘要 → 点「生成 PNG 一页战报」，图片在新标签页打开，右键即可另存 |
+| 跨场 / 跨主播分析 | 「数据分析」勾选多个文件 → 生成统计报告（总量、趋势图、Top 榜、高能时刻），可导出 JSON |
+| 清理刷屏重复弹幕 | 「录制文件」对单个文件点「去重」先预览再执行；分析页支持批量去重。产物为 `.dedup.jsonl`，**原文件永不覆盖** |
+| 重点盯某个人 | 分析页活跃用户可一键「加关心」，去重时该用户弹幕全部保留并打 `cared` 标记 |
+
+### 6. 战报与历史数据说明
+
+- 战报包含封面、标题、十项指标（弹幕数 / 独立观众 / 峰值平均人气 / 总营收 / SC / 金礼物 /
+  弹幕峰值 / 互动速率 / 累计看过）、人气曲线、弹幕分钟分布和三个榜单。
+- **人气曲线**需要 2026-10 新版录制产生的 `popularity` 数据（25 秒采样）；历史文件无此数据时，
+  战报对应区域会显示缺数据提示，其余内容正常。
+- 总营收 = SC 金额 + 金礼物（金瓜子 ÷ 1000）；银瓜子免费礼物不计。
+- 「累计看过」需要设置页 SESSDATA 有效，程序会在线向 B 站接口补全；获取失败显示「—」，不影响出图。
+
+### 7. 命令行模式（无界面挂机）
+
+不想开 Web 界面、或临时录一场时可用：
+
+```bash
+# 按 config/targets.json 录制（首次可从 config/targets.example.json 复制改，
+# 一般直接在 Web「房间管理」页维护即可，无需手改）
 python -m recorder.cli
 
 # 临时录制单个房间
@@ -75,7 +143,31 @@ python -m recorder.cli --idle-stop 60
 python -m recorder.cli --keep-gifts
 ```
 
-也可以使用 `.env` 文件配置凭证（见 `.env.example`），环境变量优先级高于设置页。
+### 8. 团队协作约定（重要）
+
+以下内容均已被 `.gitignore` 排除，**各自保存在本机、不要提交**：
+
+- `config/settings.json`（含 SESSDATA、数据目录）、`config/targets.json`（房间列表）、`.env`
+- `data/` 整个数据目录（弹幕含用户言论，本地留存）
+
+需要注意：
+
+- 每人用**自己的 SESSDATA**，不要在群里/对话里传播 token 或 cookie；泄露后立即去 GitHub / B 站吊销。
+- `匿名盐`（`DANMAKU_ANON_SALT`）决定用户哈希：同一盐才能跨文件、跨机器关联同一观众。
+  团队做联合分析时应统一盐值（线下约定），改盐后新旧文件的用户将对不上。
+- 推荐只用一个常驻实例录制（见第 3 步），其他人通过局域网访问 Web；多实例同时用同一账号连接
+  会触发 B 站并发限制互相秒踢。
+- 房间列表的增删建议由维护人统一在常驻实例的 Web 上操作。
+
+### 9. 常见问题
+
+- **启动报端口被占用**：`python run.py --port 其他端口`。
+- **房间一直重连 / 秒踢**：多半是游客模式或账号同时在播房间过多。先在设置页填好 SESSDATA；
+  单账号同时在播房间建议不超过 3–4 个，程序已内置节点轮换与熔断，仍不行就减少同时录制数。
+- **战报人气区显示无数据**：该文件录于人气采集上线前，属于正常现象。
+- **独立观众数偏小**：2026-10 之前的旧文件没有匿名 uid，只能按掩码昵称估算，会偏低。
+- **想开机自启 / 后台常驻**：Windows 可用计划任务执行 `python run.py --no-browser`，
+  Linux/macOS 可用 systemd / nohup / tmux。
 
 ## Web 界面
 
@@ -92,7 +184,7 @@ python -m recorder.cli --keep-gifts
 ## 数据格式
 
 ```
-data/
+{data_dir}/   # 默认项目内 data/，可在设置页修改；两个子目录名也可在配置中改
 ├── records/{主播目录}/live_YYYYMMDD.jsonl      # 弹幕 / 人气 / SC / 礼物
 └── weak_label/{主播目录}/weak_YYYYMMDD.jsonl   # 房管处置弱标签
 ```
