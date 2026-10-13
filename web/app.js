@@ -1001,7 +1001,7 @@ async function openReport(kind, path) {
         ${fmt.esc(s.title || '（无标题）')}</div>
       <div class="muted" style="margin-bottom:14px">
         ${fmt.esc(s.anchor || s.vup)} · ${fmt.esc(s.date || '日期未知')} · 时长 ${dur}
-        ${s.watched_show ? '· ' + fmt.esc(s.watched_show) : ''}</div>
+        ${(s.watched_show || s.watched_recorded) ? '· 累计看过 ' + fmt.esc(s.watched_show || s.watched_recorded) : ''}</div>
       <div class="dedup-stats">
         ${row('弹幕总数', fmt.n(s.danmaku))}
         ${row('独立观众', fmt.n(s.users))}
@@ -1013,7 +1013,9 @@ async function openReport(kind, path) {
         ${row('弹幕峰值', fmt.n(s.dm_peak.count) + ' 条/分')}
       </div>
       ${s.has_pop ? `<div class="hint" style="margin:0">人气曲线共 ${fmt.n(s.pop_points)} 个采样点（25 秒粒度），将绘制在战报图中。</div>`
-        : '<div class="hint" style="margin:0;color:var(--warn)">该文件录制于人气采集上线前，战报中无人气曲线（其余内容正常）。</div>'}`;
+        : '<div class="hint" style="margin:0;color:var(--warn)">峰值/平均人气与曲线：该文件录制于人气采集上线前，历史数据无法回填（其余内容正常）。</div>'}
+      ${(s.watched_show || s.watched_recorded) ? ''
+        : '<div class="hint" style="margin:0">「累计看过」由新版录制器在直播中随人气采样保存；本场录制时该能力尚未生效，无法补取。</div>'}`;
   } catch (err) {
     $('#reportBody').innerHTML = `<div style="color:var(--danger)">汇总失败：${fmt.esc(err.message)}</div>`;
   }

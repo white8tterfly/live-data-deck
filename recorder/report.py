@@ -71,6 +71,7 @@ def summarize_file(path: Path) -> dict:
     sc_users: dict[str, dict] = {}
     minutes: Counter = Counter()
     pop_series: list[list[int]] = []
+    watched_recorded = ""  # 录制时随人气采样落盘的「累计看过」最后值
 
     for rec in _iter_records(path):
         typ = rec.get("_type")
@@ -111,8 +112,12 @@ def summarize_file(path: Path) -> dict:
         elif typ == "popularity":
             ts = int(rec.get("ts", 0) or 0)
             val = int(rec.get("popularity", 0) or 0)
-            if ts and val >= 0:
+            # val<=1 为无效采样（早期版本 WS 心跳在现网固定回 1 的脏数据）
+            if ts and val > 1:
                 pop_series.append([ts, val])
+            w = str(rec.get("watched") or "").strip()
+            if w:
+                watched_recorded = w
 
     pop_series.sort(key=lambda p: p[0])
     pop_vals = [v for _, v in pop_series]
@@ -156,6 +161,7 @@ def summarize_file(path: Path) -> dict:
         "pop_avg": round(sum(pop_vals) / len(pop_vals)) if pop_vals else 0,
         "has_pop": bool(pop_series),
         "watched_show": "",
+        "watched_recorded": watched_recorded,
         "dm_peak": {"ts": peak_minute[0], "count": peak_minute[1]},
         "dm_bars": dm_bars,
         "dm_bucket": dm_bucket,
@@ -167,24 +173,50 @@ def summarize_file(path: Path) -> dict:
 
 
 def enrich_online(s: dict, sessdata: str = "") -> dict:
-    """尽力而为补：封面（旧文件没有）与「累计看过」文案。失败静默。"""
+    """尽力而为补：封面（旧文件没有）与「累计看过」文案。失败静默。
+
+    注意（2026-10 实测）：
+    - getInfoByRoom 必须带浏览器指纹 cookie + wbi 签名，否则返回 -352；
+    - 「累计看过」在顶层 watched_show.text_large（旧版是 watched.show，做兼容）；
+    - 该字段直播中为真实累计（如「5798人看过」），下播后会被重置成个位数的无意义值，
+      因此只在 room_info.live_status==1 时采用；
+    - 在线接口只能拿到房间「当前」状态，无法还原某场历史直播，旧文件补不到。
+    """
+    s.setdefault("live_status_now", None)
     try:
         import httpx
+        from . import protocol as P
+        room = s.get("room_id")
+        if not room:
+            return s
         cookies = {"SESSDATA": sessdata} if sessdata else None
-        with httpx.Client(headers={"User-Agent": "Mozilla/5.0"},
-                          cookies=cookies, timeout=8,
+        with httpx.Client(headers=P.HEADERS, cookies=cookies, timeout=12,
                           follow_redirects=True) as cli:
-            room = s["room_id"]
-            if not s["cover_url"] and room:
+            P.init_risk_cookies(cli)
+            if not s.get("cover_url"):
                 info = cli.get(
                     "https://api.live.bilibili.com/room/v1/Room/get_info",
                     params={"room_id": room}).json().get("data", {})
-                s["cover_url"] = info.get("keyframe", "") or info.get("user_cover", "")
-            if room:
-                d = cli.get(
+                s["cover_url"] = (info.get("keyframe", "")
+                                  or info.get("user_cover", ""))
+            try:
+                wbi_key = P.get_wbi_key(cli)
+                params = P.wbi_sign({"room_id": room}, wbi_key)
+                body = cli.get(
                     "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom",
-                    params={"room_id": room}).json().get("data", {})
-                s["watched_show"] = (d.get("watched", {}) or {}).get("show", "")
+                    params=params).json()
+                if body.get("code") == 0:
+                    d = body.get("data", {})
+                    live_status = (d.get("room_info", {}) or {}).get("live_status")
+                    s["live_status_now"] = live_status
+                    # 仅直播中采用：下播后 watched_show 会被重置为个位数无意义值
+                    if live_status == 1:
+                        ws = d.get("watched_show") or d.get("watched") or {}
+                        s["watched_show"] = ws.get("text_large") or ws.get("show") or ""
+                    else:
+                        s["watched_show"] = ""
+            except Exception:
+                pass
     except Exception:
         pass
     return s
@@ -313,8 +345,9 @@ def render_png(s: dict, out_path: Path | None = None) -> bytes:
     if s["live_start"]:
         meta += f"　开播 {s['live_start'][11:16]}"
     d.text((rx, ty + 42), meta, font=f_body, fill=TEXT3)
-    if s["watched_show"]:
-        d.text((rx, ty + 74), f"累计看过：{s['watched_show']}",
+    watched = s.get("watched_show") or s.get("watched_recorded") or ""
+    if watched:
+        d.text((rx, ty + 74), f"累计看过：{watched}",
                font=f_body, fill=GOLD)
     y += cover_h + 24
 
@@ -329,7 +362,7 @@ def render_png(s: dict, out_path: Path | None = None) -> bytes:
         ("金礼物营收", f"¥{_fmt_n(s['gift_amount'])}（{s['gift_count']}件）", TEXT),
         ("弹幕峰值", f"{_fmt_n(s['dm_peak']['count'])} 条/分", BLUE),
         ("互动速率", f"{round(s['danmaku'] / s['span_sec'] * 60, 1) if s['span_sec'] else 0} 条/分", TEXT),
-        ("累计看过", s["watched_show"] or "—", TEXT2),
+        ("累计看过", s.get("watched_show") or s.get("watched_recorded") or "—", TEXT2),
     ]
     cols, gap = 5, 14
     cw = (content_w - gap * (cols - 1)) // cols

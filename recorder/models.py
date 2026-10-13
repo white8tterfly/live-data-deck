@@ -60,7 +60,8 @@ class RoomRuntime:
         return len(self._rate_window)
 
     def update_popularity(self, value: int) -> None:
-        if value < 0:
+        # <=1 视为无效：WS 心跳在现网固定回 1，HTTP 失败兜底也可能给 0
+        if value <= 1:
             return
         self.popularity_now = value
         if value > self.popularity_peak:

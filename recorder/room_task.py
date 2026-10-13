@@ -188,7 +188,26 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                                 return
                             await ws.send(P.pack(2))
 
+                    async def pop_poll() -> None:
+                        # 人气改走 HTTP（WS 心跳现网固定回 1）：连接后立即拉一次，
+                        # 之后与心跳同节奏 25s；同步 httpx 调用放线程池避免阻塞事件循环
+                        while True:
+                            try:
+                                info = await asyncio.to_thread(
+                                    session.get_popularity)
+                                _record_popularity(
+                                    info, session, rt, bus, records_dir)
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception:
+                                pass
+                            for _ in range(P.HEARTBEAT_INTERVAL):
+                                if state.get("close_requested"):
+                                    return
+                                await asyncio.sleep(1)
+
                     hb = asyncio.create_task(heartbeat())
+                    pp = asyncio.create_task(pop_poll())
                     buf = b""
                     try:
                         async for raw in ws:
@@ -223,10 +242,6 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                                     _handle_message(
                                         op, payload, session, rt, state,
                                         bus, records_dir, weak_dir, salt, opts)
-                                elif op == 3:
-                                    _handle_message(
-                                        op, payload, session, rt, state,
-                                        bus, records_dir, weak_dir, salt, opts)
                                 elif op == 8:
                                     reply = payload.decode(errors="replace")
                                     if '"code":0' not in reply:
@@ -239,6 +254,7 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                                 break
                     finally:
                         hb.cancel()
+                        pp.cancel()
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
                 exc = e
             except Exception as e:  # 握手异常等：记录后按断线重连处理
@@ -300,28 +316,39 @@ async def record_room(rt: RoomRuntime, settings: Settings,
             session.close()
 
 
+def _record_popularity(info: dict, session: LiveRoomSession, rt: RoomRuntime,
+                       bus: EventBus, records_dir) -> None:
+    """HTTP 轮询到人气后的统一处理：更新运行态、落盘、推送仪表盘。
+
+    popularity 行可选带 watched（直播中的「累计看过」文案），供赛后战报使用。
+    """
+    pop = int(info.get("popularity") or 0)
+    before = rt.popularity_now
+    rt.update_popularity(pop)
+    # 被脏值防护忽略（<=1）且此前无有效值时不产生噪声
+    if rt.popularity_now == before and pop <= 1:
+        return
+    watched = str(info.get("watched") or "")
+    if rt.current_file:
+        rec = {"_type": "popularity", "ts": int(time.time()),
+               "popularity": rt.popularity_now}
+        if watched:
+            rec["watched"] = watched
+        try:
+            with (records_dir / rt.vup / rt.current_file).open(
+                    "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    bus.emit("popularity", {
+        "room_id": rt.room_id, "vup": rt.vup,
+        "popularity": rt.popularity_now, "peak": rt.popularity_peak})
+
+
 def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
                     rt: RoomRuntime, state: dict, bus: EventBus,
                     records_dir, weak_dir, salt: str, opts: dict) -> None:
-    # op=3：心跳应答包，正文前 4 字节大端 uint32 = 当前人气值
-    if op == 3:
-        if len(payload) < 4:
-            return
-        pop = struct.unpack(">I", payload[:4])[0]
-        rt.update_popularity(pop)
-        if rt.current_file:
-            rec = {"_type": "popularity", "ts": int(time.time()),
-                   "popularity": pop}
-            try:
-                with (records_dir / rt.vup / rt.current_file).open(
-                        "a", encoding="utf-8") as f:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            except OSError:
-                pass
-        bus.emit("popularity", {
-            "room_id": rt.room_id, "vup": rt.vup,
-            "popularity": rt.popularity_now, "peak": rt.popularity_peak})
-        return
+    # op=3（心跳应答）现网固定回 1，不再含人气；人气改由 HTTP 轮询，见 pop_poll
     if op != 5:
         return
     try:

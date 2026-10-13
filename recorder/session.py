@@ -95,6 +95,46 @@ class LiveRoomSession:
                               or body.get("user_cover", "") or self.cover_url)
             self.live_start_str = body.get("live_time", "") or self.live_start_str
 
+    def get_popularity(self) -> dict:
+        """HTTP 拉取当前加权人气与累计看过文案。
+
+        2026-10 起 WS 心跳应答（op=3）对所有节点固定回 1，不再含真实人气，
+        故人气改走 getInfoByRoom：data.popularity.popularity（与 room_info.online 一致）。
+        返回 {popularity:int, watched:str(仅直播中有值), live_status:int}。
+        -352 时自动重建签名凭证后重试一次。
+        """
+        def _do() -> dict:
+            params = P.wbi_sign({"room_id": self.room_id}, self.wbi_key)
+            body = self.client.get(
+                "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom",
+                params=params).json()
+            if body.get("code") == -352:
+                self.refresh_credentials()
+                params = P.wbi_sign({"room_id": self.room_id}, self.wbi_key)
+                body = self.client.get(
+                    "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom",
+                    params=params).json()
+            if body.get("code") != 0:
+                raise RuntimeError(
+                    f"getInfoByRoom code={body.get('code')} {str(body.get('message',''))[:40]}")
+            d = body.get("data", {})
+            ri = d.get("room_info", {}) or {}
+            pop = int((d.get("popularity") or {}).get("popularity")
+                      or ri.get("online") or 0)
+            live_status = int(ri.get("live_status") or 0)
+            watched = ""
+            if live_status == 1:
+                ws = d.get("watched_show") or d.get("watched") or {}
+                watched = ws.get("text_large") or ws.get("show") or ""
+            return {"popularity": pop, "watched": watched,
+                    "live_status": live_status}
+        try:
+            return _do()
+        except Exception:
+            # 重建凭证后再兜底一次
+            self.refresh_credentials()
+            return _do()
+
     def close(self) -> None:
         self.client.close()
 

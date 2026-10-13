@@ -246,7 +246,7 @@ def create_app() -> FastAPI:
     def _build_summary(rel: str, kind: str) -> dict:
         src = _safe_file(kind, rel)
         s = report_mod.summarize_file(src)
-        sess = mgr().settings_store.settings.sessdata
+        sess = mgr().settings_store.settings.effective_sessdata()
         report_mod.enrich_online(s, sess)
         # 前端摘要不需要原始曲线点
         s["pop_points"] = len(s.pop("pop_series", []))
@@ -266,7 +266,8 @@ def create_app() -> FastAPI:
         def gen() -> bytes:
             src = _safe_file(body.kind, body.path)
             s = report_mod.summarize_file(src)
-            report_mod.enrich_online(s, mgr().settings_store.settings.sessdata)
+            report_mod.enrich_online(
+                s, mgr().settings_store.settings.effective_sessdata())
             return report_mod.render_png(s)
         png = await asyncio.to_thread(gen)
         return Response(content=png, media_type="image/png",
