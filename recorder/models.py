@@ -31,6 +31,10 @@ class RoomRuntime:
     connected_at: float = 0        # 本次 WS 连接时间
     last_event_at: float = 0       # 最近一条弹幕/事件时间
 
+    # 人气值（WS op=3 心跳应答，25s 粒度；平台加权指标，非独立人数）
+    popularity_now: int = 0
+    popularity_peak: int = 0
+
     counters: dict = field(default_factory=lambda: {
         "danmaku": 0, "super_chat": 0, "gift": 0,
         "emoticon_skipped": 0, "moderation": 0,
@@ -54,6 +58,13 @@ class RoomRuntime:
     def rate_per_min(self) -> int:
         self._trim_rate()
         return len(self._rate_window)
+
+    def update_popularity(self, value: int) -> None:
+        if value < 0:
+            return
+        self.popularity_now = value
+        if value > self.popularity_peak:
+            self.popularity_peak = value
 
     def uptime_sec(self) -> int:
         return int(time.time() - self.started_at) if self.started_at else 0
@@ -96,5 +107,7 @@ class RoomRuntime:
             "uptime_sec": self.uptime_sec(),
             "conn_sec": self.conn_sec(),
             "rate_per_min": self.rate_per_min,
+            "popularity_now": self.popularity_now,
+            "popularity_peak": self.popularity_peak,
             "counters": dict(self.counters),
         }

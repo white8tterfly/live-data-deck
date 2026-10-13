@@ -7,16 +7,17 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from recorder import analysis as analysis_mod
 from recorder import dedup as dedup_mod
+from recorder import report as report_mod
 from recorder.config import WEB_DIR
 from recorder.manager import RecorderManager
 from recorder.session import verify_sessdata
 from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
-                            DedupIn, TargetIn, TargetPatch)
+                            DedupIn, ReportIn, TargetIn, TargetPatch)
 
 PREVIEW_BYTES = 256 * 1024   # 大文件只从尾部读 256KB
 PREVIEW_MAX_LINES = 500
@@ -240,6 +241,36 @@ def create_app() -> FastAPI:
     async def dedup_run(body: DedupIn):
         return await asyncio.to_thread(
             _do_dedup, body.path, body.kind, body.window_sec, True)
+
+    # ---------------- 单场直播战报 ----------------
+    def _build_summary(rel: str, kind: str) -> dict:
+        src = _safe_file(kind, rel)
+        s = report_mod.summarize_file(src)
+        sess = mgr().settings_store.settings.sessdata
+        report_mod.enrich_online(s, sess)
+        # 前端摘要不需要原始曲线点
+        s["pop_points"] = len(s.pop("pop_series", []))
+        s.pop("pop_series", None)
+        s.pop("dm_bars", None)
+        s.pop("top_texts", None)
+        s.pop("top_sc", None)
+        s.pop("top_medals", None)
+        return s
+
+    @app.post("/api/report/summary")
+    async def report_summary(body: ReportIn):
+        return await asyncio.to_thread(_build_summary, body.path, body.kind)
+
+    @app.post("/api/report/image")
+    async def report_image(body: ReportIn):
+        def gen() -> bytes:
+            src = _safe_file(body.kind, body.path)
+            s = report_mod.summarize_file(src)
+            report_mod.enrich_online(s, mgr().settings_store.settings.sessdata)
+            return report_mod.render_png(s)
+        png = await asyncio.to_thread(gen)
+        return Response(content=png, media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
 
     @app.post("/api/dedup/run-batch")
     async def dedup_run_batch(body: DedupBatchIn):

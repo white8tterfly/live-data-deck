@@ -223,6 +223,10 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                                     _handle_message(
                                         op, payload, session, rt, state,
                                         bus, records_dir, weak_dir, salt, opts)
+                                elif op == 3:
+                                    _handle_message(
+                                        op, payload, session, rt, state,
+                                        bus, records_dir, weak_dir, salt, opts)
                                 elif op == 8:
                                     reply = payload.decode(errors="replace")
                                     if '"code":0' not in reply:
@@ -299,6 +303,25 @@ async def record_room(rt: RoomRuntime, settings: Settings,
 def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
                     rt: RoomRuntime, state: dict, bus: EventBus,
                     records_dir, weak_dir, salt: str, opts: dict) -> None:
+    # op=3：心跳应答包，正文前 4 字节大端 uint32 = 当前人气值
+    if op == 3:
+        if len(payload) < 4:
+            return
+        pop = struct.unpack(">I", payload[:4])[0]
+        rt.update_popularity(pop)
+        if rt.current_file:
+            rec = {"_type": "popularity", "ts": int(time.time()),
+                   "popularity": pop}
+            try:
+                with (records_dir / rt.vup / rt.current_file).open(
+                        "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except OSError:
+                pass
+        bus.emit("popularity", {
+            "room_id": rt.room_id, "vup": rt.vup,
+            "popularity": rt.popularity_now, "peak": rt.popularity_peak})
+        return
     if op != 5:
         return
     try:
@@ -378,14 +401,22 @@ def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
             return
         d = msg.get("data", {})
         uid = d.get("uid", 0)
+        gift_info = d.get("gift_info") if isinstance(d.get("gift_info"), dict) else {}
+        coin_type = (d.get("coin_type")
+                     or gift_info.get("coin_type", "")).lower()
         rec = {
             "_type": "gift",
             "uid_anon": (F.anon_id(uid, salt) if uid and opts["anonymize"]
                          else (str(uid) if uid else "")),
+            "uname_anon": (F.anon_name(d.get("uname", ""))
+                           if opts["anonymize"] else d.get("uname", "")),
             "gift_id": d.get("gift_id", 0),
-            "gift_name": d.get("gift_info", {}).get("name", "")
-                         if isinstance(d.get("gift_info"), dict) else "",
+            "gift_name": gift_info.get("name", "") or d.get("gift_name", ""),
             "num": d.get("num", 1),
+            # 金瓜子计费：gold=付费(1000=¥1)，silver=免费礼物不计营收
+            "coin_type": coin_type,
+            "total_coin": d.get("total_coin", 0),
+            "discount_price": d.get("discount_price", 0),
             "ts": int(time.time()),
         }
         out_file = storage.ensure_out_file(session, rt, records_dir)

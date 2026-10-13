@@ -39,6 +39,8 @@ def ensure_out_file(session: LiveRoomSession, rt: RoomRuntime,
             "_type": "session_header", "room_id": session.real_room_id,
             "vup": rt.vup, "anchor_name": session.anchor_name,
             "title": session.title, "live_status": session.live_status,
+            "cover_url": getattr(session, "cover_url", ""),
+            "live_start": getattr(session, "live_start_str", ""),
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
         with out_file.open("a", encoding="utf-8") as f:

@@ -39,3 +39,8 @@ class DedupBatchIn(BaseModel):
     paths: list[str] = Field(min_length=1, max_length=30)
     kind: str = "records"
     window_sec: int = Field(default=300, ge=0, le=86400)
+
+
+class ReportIn(BaseModel):
+    path: str
+    kind: str = "records"

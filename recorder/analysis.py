@@ -48,7 +48,7 @@ def _len_bucket(n: int) -> str:
 def analyze_files(paths: list[Path]) -> dict:
     files_stat = []
     total_dm = total_sc = total_gift = total_mod = 0
-    sc_amount = 0.0
+    sc_amount = gift_amount = 0.0
     t_min, t_max = None, None
 
     users: dict[str, dict] = {}          # uid -> 聚合
@@ -116,6 +116,8 @@ def analyze_files(paths: list[Path]) -> dict:
             elif typ == "gift":
                 f_gift += 1
                 total_gift += 1
+                if str(rec.get("coin_type", "")).lower() == "gold":
+                    gift_amount += float(rec.get("total_coin", 0) or 0) / 1000
             elif typ == "moderation_event":
                 f_mod += 1
                 total_mod += 1
@@ -186,6 +188,8 @@ def analyze_files(paths: list[Path]) -> dict:
             "super_chat": total_sc,
             "sc_amount": round(sc_amount, 2),
             "gift": total_gift,
+            "gift_amount": round(gift_amount, 2),
+            "revenue": round(sc_amount + gift_amount, 2),
             "moderation": total_mod,
             "start": t_min, "end": t_max, "span_sec": span_sec,
             "peak_per_min": max(minutes.values()) if minutes else 0,

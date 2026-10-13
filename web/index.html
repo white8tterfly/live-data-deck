@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>弹幕墙 · B站直播弹幕录制器</title>
+<title>直播数据舱 · B站直播全数据录制与分析</title>
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📼</text></svg>">
 </head>
@@ -12,10 +12,10 @@
   <!-- 侧边栏 -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-logo">弹</div>
+      <div class="brand-logo">舱</div>
       <div class="brand-text">
-        <div class="brand-name">弹幕墙</div>
-        <div class="brand-sub">Danmaku Recorder</div>
+        <div class="brand-name">直播数据舱</div>
+        <div class="brand-sub">Live Data Deck</div>
       </div>
     </div>
     <nav class="nav">
@@ -161,7 +161,7 @@
         <table class="table">
           <thead><tr>
             <th>主播目录</th><th>文件</th><th style="width:110px">大小</th>
-            <th style="width:140px">最后修改</th><th style="width:170px">操作</th>
+            <th style="width:140px">最后修改</th><th style="width:250px">操作</th>
           </tr></thead>
           <tbody id="filesTable"></tbody>
         </table>
@@ -254,7 +254,7 @@
         <div class="panel">
           <div class="panel-title">录制策略</div>
           <div class="switch-row"><div><div class="sw-title">录制礼物事件</div>
-            <div class="hint">默认关闭，礼物对弹幕分析价值较低</div></div>
+            <div class="hint">关闭则战报无礼物营收；开启后记录礼物名/数量与金瓜子价值</div></div>
             <input type="checkbox" id="swGifts"></div>
           <div class="switch-row"><div><div class="sw-title">过滤纯表情弹幕</div>
             <div class="hint">剥除 [表情] 后无文字的弹幕不落盘，文字+表情保留</div></div>
@@ -309,6 +309,23 @@
       </div>
     </section>
   </main>
+</div>
+
+<!-- 直播战报弹窗 -->
+<div class="modal-mask" id="reportMask" hidden>
+  <div class="modal" style="width:min(720px,92vw)">
+    <div class="modal-head">
+      <span>单场直播战报</span>
+      <button class="btn btn-sm" id="reportClose" type="button">关闭</button>
+    </div>
+    <div class="modal-body nonmono" id="reportBody">
+      <div class="muted">正在汇总…</div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" style="margin:0">营收=SC+金礼物；人气值为 B 站加权指标</span>
+      <button class="btn btn-primary" id="reportGen" style="margin-left:auto" type="button">生成 PNG 一页战报</button>
+    </div>
+  </div>
 </div>
 
 <!-- 去重弹窗 -->

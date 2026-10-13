@@ -36,6 +36,9 @@ class LiveRoomSession:
         self.live_status = info.get("live_status", 0)
         self.title = info.get("title", "")
         self.anchor_name = info.get("uname", "")
+        self.cover_url = info.get("keyframe", "") or info.get("user_cover", "")
+        # live_time 为 "YYYY-MM-DD HH:MM:SS" 字符串，开播时间
+        self.live_start_str = info.get("live_time", "") or ""
 
     def refresh_credentials(self) -> None:
         """-352 风控后重建风控指纹 + wbi key。"""
@@ -88,6 +91,9 @@ class LiveRoomSession:
             self.live_status = body.get("live_status", self.live_status)
             self.title = body.get("title", self.title)
             self.anchor_name = body.get("uname", self.anchor_name)
+            self.cover_url = (body.get("keyframe", "")
+                              or body.get("user_cover", "") or self.cover_url)
+            self.live_start_str = body.get("live_time", "") or self.live_start_str
 
     def close(self) -> None:
         self.client.close()

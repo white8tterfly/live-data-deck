@@ -118,6 +118,15 @@ function onEvent(type, data) {
     }
     return;
   }
+  if (type === 'popularity') {
+    const r = state.rooms.find((x) => x.room_id === data.room_id);
+    if (r) {
+      r.popularity_now = data.popularity;
+      r.popularity_peak = data.peak;
+      if ($('#view-dashboard').classList.contains('active')) renderRoomGrid();
+    }
+    return;
+  }
   if (type === 'log') {
     state.logs.push(data);
     if (state.logs.length > 1000) state.logs.shift();
@@ -184,6 +193,10 @@ function roomCard(r) {
     if (r.host_count) meta.push(`节点 <b>${r.host_index}/${r.host_count}</b>`);
     if (r.retries) meta.push(`重连 <b>${r.retries}</b>`);
     meta.push(`<b>${r.rate_per_min}</b> 条/分`);
+    if (r.popularity_now) {
+      meta.push(`人气 <b>${fmt.n(r.popularity_now)}</b>`
+        + (r.popularity_peak ? `（峰 ${fmt.n(r.popularity_peak)}）` : ''));
+    }
   }
   if (r.current_file) meta.push(`文件 <b>${fmt.esc(r.current_file)}</b>`);
   const running = r.phase === 'recording';
@@ -407,6 +420,8 @@ async function loadFiles() {
         ? `${f.age_hour.toFixed(1)} 小时前` : `${(f.age_hour / 24).toFixed(1)} 天前`}</td>
       <td>
         <button class="btn btn-sm" data-preview="${fmt.esc(f.path)}">预览</button>
+        ${state.filesKind === 'records'
+          ? `<button class="btn btn-sm btn-primary" data-report="${fmt.esc(f.path)}">战报</button>` : ''}
         ${state.filesKind === 'records' && !f.deduped
           ? `<button class="btn btn-sm" data-dedup="${fmt.esc(f.path)}">去重</button>`
           : f.deduped ? '<span class="ft-tag dedup" style="margin:0">已去重</span>' : ''}
@@ -749,6 +764,7 @@ function renderReport(d) {
       ${card(fmt.n(t.users), '独立用户')}
       ${card(fmt.n(t.super_chat), 'SC 条数')}
       ${card('¥' + fmt.n(t.sc_amount), 'SC 总金额', 'gold')}
+      ${card('¥' + fmt.n(t.revenue ?? t.sc_amount), '总营收(SC+金礼物)', 'gold')}
       ${card(fmt.n(t.gift), '礼物事件')}
       ${card(fmt.n(t.peak_per_min), '峰值 条/分')}
       ${card(t.avg_per_min, '平均 条/分')}
@@ -964,6 +980,74 @@ $('#filesTable').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-dedup]');
   if (!btn) return;
   openDedup(state.filesKind, btn.dataset.dedup, btn.dataset.dedup.split(/[\\/]/).pop());
+});
+
+/* ---------------- 单场直播战报 ---------------- */
+let reportCur = null;
+
+async function openReport(kind, path) {
+  reportCur = { kind, path };
+  $('#reportMask').hidden = false;
+  $('#reportBody').innerHTML = '<div class="muted">正在汇总本场数据…</div>';
+  $('#reportGen').disabled = false;
+  $('#reportGen').textContent = '生成 PNG 一页战报';
+  try {
+    const s = await api('/api/report/summary', { method: 'POST', body: { path, kind } });
+    const dur = s.span_sec >= 3600
+      ? `${(s.span_sec / 3600).toFixed(1)} 小时` : `${Math.round(s.span_sec / 60)} 分钟`;
+    const row = (l, v, cls = '') => `<div class="dedup-stat ${cls}"><b>${v}</b>${l}</div>`;
+    $('#reportBody').innerHTML = `
+      <div style="font-weight:650;font-size:15px;margin-bottom:4px">
+        ${fmt.esc(s.title || '（无标题）')}</div>
+      <div class="muted" style="margin-bottom:14px">
+        ${fmt.esc(s.anchor || s.vup)} · ${fmt.esc(s.date || '日期未知')} · 时长 ${dur}
+        ${s.watched_show ? '· ' + fmt.esc(s.watched_show) : ''}</div>
+      <div class="dedup-stats">
+        ${row('弹幕总数', fmt.n(s.danmaku))}
+        ${row('独立观众', fmt.n(s.users))}
+        ${row('峰值人气', s.has_pop ? fmt.n(s.pop_peak) : '无数据', s.has_pop ? 'warn' : '')}
+        ${row('平均人气', s.has_pop ? fmt.n(s.pop_avg) : '无数据')}
+        ${row('总营收', '¥' + fmt.n(s.revenue), 'ok')}
+        ${row('SC', s.sc_count + ' / ¥' + fmt.n(s.sc_amount))}
+        ${row('金礼物', '¥' + fmt.n(s.gift_amount))}
+        ${row('弹幕峰值', fmt.n(s.dm_peak.count) + ' 条/分')}
+      </div>
+      ${s.has_pop ? `<div class="hint" style="margin:0">人气曲线共 ${fmt.n(s.pop_points)} 个采样点（25 秒粒度），将绘制在战报图中。</div>`
+        : '<div class="hint" style="margin:0;color:var(--warn)">该文件录制于人气采集上线前，战报中无人气曲线（其余内容正常）。</div>'}`;
+  } catch (err) {
+    $('#reportBody').innerHTML = `<div style="color:var(--danger)">汇总失败：${fmt.esc(err.message)}</div>`;
+  }
+}
+
+$('#reportClose').addEventListener('click', () => { $('#reportMask').hidden = true; });
+$('#reportMask').addEventListener('click', (e) => {
+  if (e.target.id === 'reportMask') $('#reportMask').hidden = true;
+});
+$('#reportGen').addEventListener('click', async () => {
+  if (!reportCur) return;
+  const btn = $('#reportGen');
+  btn.disabled = true; btn.textContent = '绘制中…';
+  try {
+    const res = await fetch('/api/report/image', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reportCur),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    btn.textContent = '已生成（新标签页打开）';
+  } catch (err) {
+    btn.disabled = false; btn.textContent = '生成 PNG 一页战报';
+    toast(err.message, 'err');
+  }
+});
+
+$('#filesTable').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-report]');
+  if (!btn) return;
+  openReport(state.filesKind, btn.dataset.report);
 });
 
 /* ---------------- 启动 ---------------- */
