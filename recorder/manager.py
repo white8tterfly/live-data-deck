@@ -165,14 +165,19 @@ class RecorderManager:
     # ---------- 设置 ----------
     async def apply_settings(self, patch: dict) -> Settings:
         old_sess = self.settings.effective_sessdata()
+        old_records = str(self.settings.records_dir)
+        old_weak = str(self.settings.weak_dir)
         s = self.settings_store.update(patch)
         self.settings = s
-        # SESSDATA 变更：滚动重启运行中的房间，让新凭证尽快生效
-        if s.effective_sessdata() != old_sess:
+        path_changed = (str(s.records_dir) != old_records
+                        or str(s.weak_dir) != old_weak)
+        # SESSDATA 或存储路径变更：滚动重启运行中的房间使其生效
+        if s.effective_sessdata() != old_sess or path_changed:
             running = [rid for rid in self.tasks if self.is_running(rid)]
             if running:
+                reason = "登录凭证" if s.effective_sessdata() != old_sess else "存储路径"
                 self.bus.log("info",
-                             f"登录凭证已变更，滚动重启 {len(running)} 个录制任务")
+                             f"{reason}已变更，滚动重启 {len(running)} 个录制任务")
                 for rid in running:
                     await self.stop_room(rid)
                     await asyncio.sleep(1)

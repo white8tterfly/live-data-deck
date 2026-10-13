@@ -42,3 +42,15 @@ def anon_name(uname: str) -> str:
     if not uname:
         return ""
     return uname[:1] + "***" if len(uname) > 1 else uname + "***"
+
+
+def record_user_key(rec: dict) -> str:
+    """录制记录的身份键：uid（真实/匿名）优先；uid 缺失（uid=0 游客弹幕）
+    时退回掩码用户名，避免把所有游客的相同文案误并为同一人。
+    无法确定身份时返回空串（调用方应跳过用户维度统计/去重）。
+    """
+    uid = str(rec.get("uid_anon") or rec.get("uid") or "").strip()
+    if uid:
+        return uid
+    uname = str(rec.get("uname_anon") or "").strip()
+    return f"名:{uname}" if uname else ""

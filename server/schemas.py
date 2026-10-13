@@ -17,3 +17,25 @@ class TargetPatch(BaseModel):
 
 class CookieTestIn(BaseModel):
     sessdata: str | None = None
+
+
+class CaredUserIn(BaseModel):
+    key: str = Field(min_length=1)
+    note: str = ""
+
+
+class AnalysisIn(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=30)
+    kind: str = "records"
+
+
+class DedupIn(BaseModel):
+    path: str
+    kind: str = "records"
+    window_sec: int = Field(default=300, ge=0, le=86400)
+
+
+class DedupBatchIn(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=30)
+    kind: str = "records"
+    window_sec: int = Field(default=300, ge=0, le=86400)

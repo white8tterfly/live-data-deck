@@ -10,10 +10,13 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from recorder import analysis as analysis_mod
+from recorder import dedup as dedup_mod
 from recorder.config import WEB_DIR
 from recorder.manager import RecorderManager
 from recorder.session import verify_sessdata
-from server.schemas import CookieTestIn, TargetIn, TargetPatch
+from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
+                            DedupIn, TargetIn, TargetPatch)
 
 PREVIEW_BYTES = 256 * 1024   # 大文件只从尾部读 256KB
 PREVIEW_MAX_LINES = 500
@@ -157,6 +160,7 @@ def create_app() -> FastAPI:
                             "size": stat.st_size,
                             "mtime": stat.st_mtime,
                             "age_hour": round((now - stat.st_mtime) / 3600, 1),
+                            "deduped": f.name.endswith(".dedup.jsonl"),
                         })
                     except OSError:
                         continue
@@ -185,6 +189,66 @@ def create_app() -> FastAPI:
     async def download_file(kind: str, path: str):
         p = _safe_file(kind, path)
         return FileResponse(p, filename=p.name, media_type="application/x-jsonlines")
+
+    # ---------------- 关心用户名单 ----------------
+    @app.get("/api/cared-users")
+    async def list_cared():
+        return {"cared_users": mgr().settings_store.list_cared()}
+
+    @app.post("/api/cared-users", status_code=201)
+    async def add_cared(body: CaredUserIn):
+        try:
+            item = mgr().settings_store.add_cared(body.key, body.note)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        mgr().settings = mgr().settings_store.settings
+        return item
+
+    @app.delete("/api/cared-users/{key}")
+    async def remove_cared(key: str):
+        if not mgr().settings_store.remove_cared(key):
+            raise HTTPException(status_code=404, detail="名单中无此用户")
+        mgr().settings = mgr().settings_store.settings
+        return {"ok": True}
+
+    # ---------------- 数据分析 ----------------
+    @app.post("/api/analysis")
+    async def run_analysis(body: AnalysisIn):
+        files = [_safe_file(body.kind, rel) for rel in body.paths]
+        try:
+            return await asyncio.to_thread(analysis_mod.analyze_files, files)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"读取失败: {e}")
+
+    # ---------------- 后处理去重 ----------------
+    def _do_dedup(rel: str, kind: str, window_sec: int, write: bool) -> dict:
+        src = _safe_file(kind, rel)
+        if src.name.endswith(".dedup.jsonl"):
+            raise HTTPException(status_code=400,
+                                detail="该文件已是去重结果，无需再次去重")
+        cared = mgr().settings_store.cared_key_set()
+        if write:
+            return dedup_mod.run_dedup(src, cared, window_sec)
+        return dedup_mod.preview_dedup(src, cared, window_sec)
+
+    @app.post("/api/dedup/preview")
+    async def dedup_preview(body: DedupIn):
+        return await asyncio.to_thread(
+            _do_dedup, body.path, body.kind, body.window_sec, False)
+
+    @app.post("/api/dedup/run")
+    async def dedup_run(body: DedupIn):
+        return await asyncio.to_thread(
+            _do_dedup, body.path, body.kind, body.window_sec, True)
+
+    @app.post("/api/dedup/run-batch")
+    async def dedup_run_batch(body: DedupBatchIn):
+        results = []
+        for rel in body.paths:
+            results.append(await asyncio.to_thread(
+                _do_dedup, rel, body.kind, body.window_sec, True))
+        return {"results": results,
+                "total_removed": sum(r["removed"] for r in results)}
 
     # ---------------- WebSocket ----------------
     @app.websocket("/api/ws")

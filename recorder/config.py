@@ -22,7 +22,17 @@ ENV_FILE = ROOT_DIR / ".env"
 _BOOL_FIELDS = ("record_gifts", "filter_pure_emoticon", "record_moderation",
                 "anonymize", "sanitize_text", "auto_start")
 _INT_FIELDS = ("offline_poll_sec", "idle_stop_minutes")
-_STR_FIELDS = ("anon_salt", "data_dir")
+_STR_FIELDS = ("anon_salt", "data_dir", "records_subdir", "weak_subdir")
+
+
+def validate_cared_key(key: str) -> str:
+    """校验关心用户标识：纯数字真实 UID 或 16 位十六进制 uid_anon。"""
+    key = str(key).strip().lower()
+    if key.isdigit():
+        return key
+    if len(key) == 16 and all(c in "0123456789abcdef" for c in key):
+        return key
+    raise ValueError("用户标识必须是纯数字 UID 或 16 位十六进制匿名 ID")
 
 
 def _atomic_write_json(path: Path, obj) -> None:
@@ -48,6 +58,9 @@ class Settings:
     anon_salt: str = "meowmod-default-salt"
     # 存储
     data_dir: str = ""  # 空串=项目内 data/
+    # 子目录名可配置：兼容旧版录制器的 raw/weak_label 目录布局
+    records_subdir: str = "records"
+    weak_subdir: str = "weak_label"
     # 录制开关
     record_gifts: bool = False           # 礼物事件（默认不录，信息密度低）
     filter_pure_emoticon: bool = True    # 纯大表情弹幕不录（文字+表情保留）
@@ -58,17 +71,20 @@ class Settings:
     offline_poll_sec: int = 45           # 未开播轮询间隔
     idle_stop_minutes: int = 0           # 全部关播 N 分钟后自动停止（0=不启用）
     auto_start: bool = True              # 服务启动后自动录制 enabled 房间
+    # 后处理去重：关心用户名单（全量保留，不去重）
+    # key: 纯数字=真实 UID；16 位十六进制=录制文件里的 uid_anon
+    cared_users: list[dict] = field(default_factory=list)
 
     def data_path(self) -> Path:
         return Path(self.data_dir).expanduser() if self.data_dir else DEFAULT_DATA_DIR
 
     @property
     def records_dir(self) -> Path:
-        return self.data_path() / "records"
+        return self.data_path() / (self.records_subdir.strip() or "records")
 
     @property
     def weak_dir(self) -> Path:
-        return self.data_path() / "weak_label"
+        return self.data_path() / (self.weak_subdir.strip() or "weak_label")
 
     def effective_sessdata(self) -> str:
         """环境变量 SESSDATA 优先（兼容 .env / 系统环境变量用法）。"""
@@ -110,6 +126,27 @@ class SettingsStore:
                         kwargs[k] = raw[k]
             except (json.JSONDecodeError, OSError):
                 pass
+        # 关心名单做容错清洗（坏数据不影响启动）
+        raw_cared = kwargs.pop("cared_users", None)
+        if isinstance(raw_cared, list):
+            cleaned = []
+            seen = set()
+            for item in raw_cared:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    key = validate_cared_key(item.get("key", ""))
+                except ValueError:
+                    continue
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned.append({
+                    "key": key,
+                    "note": str(item.get("note", ""))[:60],
+                    "added_at": float(item.get("added_at") or time.time()),
+                })
+            kwargs["cared_users"] = cleaned
         s = Settings(**kwargs)
         # .env / 环境变量只覆盖凭证类，不写回 settings.json
         env_sess = os.environ.get("SESSDATA", "").strip()
@@ -126,6 +163,11 @@ class SettingsStore:
         for k in _BOOL_FIELDS:
             if k in patch:
                 setattr(s, k, bool(patch[k]))
+        # 子目录名做基础净化：只允许单层目录名，防止注入路径分隔
+        for k in ("records_subdir", "weak_subdir"):
+            if patch.get(k) is not None:
+                v = str(patch[k]).strip().replace("/", "").replace("\\", "")
+                setattr(s, k, v or ("records" if k == "records_subdir" else "weak_label"))
         for k in _INT_FIELDS:
             if patch.get(k) is not None:
                 try:
@@ -135,9 +177,16 @@ class SettingsStore:
                 if v < 0:
                     raise ValueError(f"{k} 不能为负数")
                 setattr(s, k, v if v >= 0 else 0)
-        for k in _STR_FIELDS:
+        for k in ("anon_salt", "data_dir"):
             if patch.get(k) is not None:
                 setattr(s, k, str(patch[k]).strip())
+        for k in ("records_subdir", "weak_subdir"):
+            if patch.get(k) is not None:
+                v = str(patch[k]).strip().replace("\\", "/").strip("/")
+                # 只允许单层目录名，防止路径穿越到数据根目录之外
+                if not v or "/" in v or v in (".", "..") or ":" in v:
+                    raise ValueError(f"{k} 必须是单层目录名（如 raw）")
+                setattr(s, k, v)
         if "sessdata" in patch and patch["sessdata"] is not None:
             val = str(patch["sessdata"]).strip()
             # 空串视为「不修改」（表单留空保存）；清空凭证请直接删 settings.json
@@ -159,6 +208,38 @@ class SettingsStore:
 
     def save(self) -> None:
         _atomic_write_json(SETTINGS_FILE, asdict(self.settings))
+
+    # ---------- 关心用户名单 ----------
+    def list_cared(self) -> list[dict]:
+        return list(self.settings.cared_users)
+
+    def add_cared(self, key: str, note: str = "") -> dict:
+        key = validate_cared_key(key)
+        for item in self.settings.cared_users:
+            if item["key"] == key:
+                if note:
+                    item["note"] = note[:60]
+                    self.save()
+                    return item
+                raise ValueError("该用户已在关心名单中")
+        item = {"key": key, "note": note.strip()[:60],
+                "added_at": time.time()}
+        self.settings.cared_users.append(item)
+        self.save()
+        return item
+
+    def remove_cared(self, key: str) -> bool:
+        key = str(key).strip().lower()
+        before = len(self.settings.cared_users)
+        self.settings.cared_users = [
+            i for i in self.settings.cared_users if i["key"] != key]
+        if len(self.settings.cared_users) == before:
+            return False
+        self.save()
+        return True
+
+    def cared_key_set(self) -> set[str]:
+        return {i["key"] for i in self.settings.cared_users}
 
 
 class TargetStore:

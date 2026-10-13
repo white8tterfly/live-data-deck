@@ -36,6 +36,10 @@
         <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
         <span>录制文件</span>
       </a>
+      <a class="nav-item" data-view="analysis">
+        <svg viewBox="0 0 24 24"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zm5.6 8H19v6h-2.8v-6z"/></svg>
+        <span>数据分析</span>
+      </a>
       <a class="nav-item" data-view="logs">
         <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-10 12H6v-2h4v2zm6-4H6v-2h10v2zm2-4H6V6h12v2z"/></svg>
         <span>运行日志</span>
@@ -167,6 +171,42 @@
       </div>
     </section>
 
+    <!-- 数据分析 -->
+    <section class="view" id="view-analysis">
+      <div class="analysis-wrap">
+        <aside class="panel analysis-side">
+          <div class="panel-title">选择录制文件</div>
+          <div class="tabs small" id="anaTabs">
+            <button class="tab active" data-kind="records">弹幕记录</button>
+            <button class="tab" data-kind="weak">弱标签</button>
+          </div>
+          <div class="analysis-mini-actions">
+            <button class="btn btn-sm" id="anaSelectAll" type="button">全选</button>
+            <button class="btn btn-sm" id="anaClear" type="button">清空</button>
+            <span class="muted" id="anaSelCount">已选 0</span>
+          </div>
+          <div class="file-tree" id="anaFileTree"></div>
+          <div class="analysis-bottom">
+            <button class="btn btn-primary" id="btnAnalyze" type="button">开始分析</button>
+            <div class="dedup-box">
+              <label>后处理去重（对选中文件）</label>
+              <div class="add-row tight">
+                <input class="input" id="anaDedupWindow" type="number" value="300" min="0" max="86400" title="同用户同文案的重复判定窗口（秒）；0=整个文件只留一条">
+                <button class="btn" id="btnBatchDedup" type="button">批量去重</button>
+              </div>
+              <div class="hint">窗口秒数；0 = 整文件去重。关心用户与 SC/礼物不参与。</div>
+            </div>
+          </div>
+        </aside>
+        <div class="analysis-report" id="analysisReport">
+          <div class="empty soft"><div class="empty-icon">📊</div>
+            <p>勾选左侧录制文件后点「开始分析」</p>
+            <p class="muted">支持跨主播多选；分析只读，不会改动任何文件</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 运行日志 -->
     <section class="view" id="view-logs">
       <div class="toolbar terminal-bar">
@@ -248,9 +288,48 @@
             <span class="hint inline" id="saveResult"></span>
           </div>
         </div>
+
+        <div class="panel panel-wide">
+          <div class="panel-title">关心用户名单 <span class="muted">后处理去重时这些用户的弹幕全部保留</span></div>
+          <div class="add-row">
+            <input class="input" id="caredKey" type="text" style="max-width:300px"
+                   placeholder="真实 UID（纯数字）或录制文件中的 16 位匿名 ID">
+            <input class="input" id="caredNote" type="text" style="max-width:220px" placeholder="备注（可留空）">
+            <button class="btn btn-primary" id="btnAddCared" type="button">添加</button>
+          </div>
+          <div class="hint">匿名 ID 可在「数据分析」页的活跃用户榜一键添加；更换匿名盐后旧匿名 ID 会失效，真实 UID 不受影响。</div>
+          <table class="table">
+            <thead><tr>
+              <th>标识</th><th style="width:240px">备注</th><th style="width:170px">添加时间</th><th style="width:80px">操作</th>
+            </tr></thead>
+            <tbody id="caredTable"></tbody>
+          </table>
+          <div class="empty soft" id="caredEmpty" hidden><p>名单为空，默认所有用户平等参与去重</p></div>
+        </div>
       </div>
     </section>
   </main>
+</div>
+
+<!-- 去重弹窗 -->
+<div class="modal-mask" id="dedupMask" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span id="dedupTitle">后处理去重</span>
+      <button class="btn btn-sm" id="dedupClose" type="button">关闭</button>
+    </div>
+    <div class="modal-body" id="dedupBody">
+      <div class="muted">正在分析…</div>
+    </div>
+    <div class="modal-foot">
+      <label class="dedup-win">窗口
+        <input class="input" id="dedupWindow" type="number" value="300" min="0" max="86400">
+        秒（0=整文件）
+      </label>
+      <button class="btn" id="dedupRePreview" type="button">重新预览</button>
+      <button class="btn btn-primary" id="dedupConfirm" type="button">执行去重（另存 .dedup.jsonl）</button>
+    </div>
+  </div>
 </div>
 
 <!-- 文件预览弹窗 -->
