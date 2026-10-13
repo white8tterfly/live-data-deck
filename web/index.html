@@ -6,6 +6,17 @@
 <title>直播数据舱 · B站直播全数据录制与分析</title>
 <link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📼</text></svg>">
+<script>
+/* 主题尽早生效，避免日间模式下先闪一屏深色 */
+(function () {
+  var saved = null;
+  try { saved = localStorage.getItem('ldd-theme'); } catch (e) {}
+  var theme = saved === 'light' || saved === 'dark'
+    ? saved
+    : (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.dataset.theme = theme;
+})();
+</script>
 </head>
 <body>
 <div class="app">
@@ -52,7 +63,7 @@
     <div class="sidebar-foot">
       <div class="ws-dot" id="wsDot" title="实时连接状态"></div>
       <span id="wsText">连接中…</span>
-      <span class="version">v1.0.0</span>
+      <span class="version">v1.2.0</span>
     </div>
   </aside>
 
@@ -61,6 +72,10 @@
     <header class="topbar">
       <h1 id="pageTitle">仪表盘</h1>
       <div class="topbar-right">
+        <button class="theme-toggle" id="btnTheme" type="button" title="切换日间 / 夜间主题" aria-label="切换主题">
+          <svg class="ic-sun" viewBox="0 0 24 24"><path d="M12 7a5 5 0 100 10 5 5 0 000-10zm0-5v3m0 14v3M2 12h3m14 0h3M4.2 4.2l2.1 2.1m11.4 11.4l2.1 2.1m0-15.6l-2.1 2.1M6.3 17.7l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </button>
         <span class="global-pill" id="globalPill">
           <i class="dot"></i><span id="globalPillText">未在录制</span>
         </span>
@@ -231,9 +246,14 @@
                      placeholder="粘贴 SESSDATA 值；游客模式可留空但稳定性较差">
               <button class="btn btn-sm" id="toggleSess" type="button">显示</button>
             </div>
-            <div class="hint">
-              获取：浏览器登录 <b>live.bilibili.com</b> → F12 → Application → Cookies →
-              复制 <code>SESSDATA</code>。凭证仅保存在本机 <code>config/settings.json</code>，不会上传。
+            <div class="guide">
+              <div class="guide-head">如何获取 SESSDATA（约 30 秒）</div>
+              <ol class="guide-steps">
+                <li>用电脑浏览器（Chrome / Edge）登录 <code>live.bilibili.com</code></li>
+                <li>按 <kbd>F12</kbd> 打开开发者工具，切到 <b>Application</b>（应用）→ 左侧 <b>Cookies</b> → <code>https://live.bilibili.com</code></li>
+                <li>在 Cookie 列表找到 <code>SESSDATA</code>，复制它的值，粘贴到上方输入框并保存</li>
+              </ol>
+              <div class="guide-lock">凭证仅保存在本机 <code>config/settings.json</code>，不会上传任何服务器</div>
             </div>
           </div>
           <div class="form-row">
@@ -243,6 +263,12 @@
           <div class="form-row">
             <label>匿名化盐（DANMAKU_ANON_SALT）</label>
             <input class="input" id="setSalt" type="text" placeholder="跨文件保持一致即可">
+            <div class="hint">
+              录制时用它把观众真实 UID 加盐哈希成 16 位匿名 ID，文件中不保存真实 UID，用于隐私保护。
+              盐值相同，同一观众在各场次的匿名 ID 才一致，跨文件去重/用户聚合才能对上；
+              <b>一旦更换盐值，历史文件里的旧匿名 ID 与新数据将无法关联</b>（跨场去重、按匿名 ID 添加的关心名单会失效，真实 UID 不受影响）。
+              无特殊需求保持默认即可，也可用环境变量 <code>DANMAKU_ANON_SALT</code> 覆盖。
+            </div>
           </div>
           <div class="form-row">
             <label>数据保存目录</label>
@@ -306,6 +332,73 @@
           </table>
           <div class="empty soft" id="caredEmpty" hidden><p>名单为空，默认所有用户平等参与去重</p></div>
         </div>
+
+        <div class="panel panel-wide">
+          <div class="panel-title">战报样式 <span class="muted">配色 / 字体 / 排版 / 内容区块 · 保存后重新生成战报即生效（存于 config/report_theme.json，也可直接编辑该文件）</span></div>
+
+          <div class="th-toolbar">
+            <button class="btn btn-sm" type="button" data-th-preset="dark">套用深色预设</button>
+            <button class="btn btn-sm" type="button" data-th-preset="light">套用浅色预设</button>
+            <button class="btn btn-sm" type="button" id="btnThPreview">生成预览</button>
+            <button class="btn btn-sm btn-primary" type="button" id="btnThSave">保存样式</button>
+            <button class="btn btn-sm" type="button" id="btnThReset">恢复默认</button>
+            <span class="hint inline" id="thResult"></span>
+          </div>
+
+          <div class="th-group-title">配色</div>
+          <div class="th-colors" id="thColors"></div>
+
+          <div class="th-group-title">字体与排版</div>
+          <div class="th-form-grid">
+            <label class="th-field span-2">常规字体文件路径（.ttf / .ttc / .otf，留空 = 微软雅黑）
+              <input class="input" id="thFontRegular" type="text"
+                     placeholder="如 D:\fonts\SourceHanSansSC-Regular.otf">
+            </label>
+            <label class="th-field span-2">粗体字体文件路径（留空 = 微软雅黑粗体）
+              <input class="input" id="thFontBold" type="text"
+                     placeholder="如 D:\fonts\SourceHanSansSC-Bold.otf">
+            </label>
+            <label class="th-field">字号档位
+              <select class="input" id="thFontScale">
+                <option value="0.92">小</option>
+                <option value="1.0" selected>标准</option>
+                <option value="1.12">大</option>
+              </select>
+            </label>
+            <label class="th-field">画布宽度
+              <select class="input" id="thWidth"></select>
+            </label>
+            <label class="th-field">指标卡每行个数
+              <select class="input" id="thCardCols"></select>
+            </label>
+            <label class="th-field span-2">头部品牌行文字
+              <input class="input" id="thBrand" type="text" maxlength="40">
+            </label>
+            <label class="th-field span-3">自定义页脚（留空 = 默认营收口径文案）
+              <input class="input" id="thFooter" type="text" maxlength="80">
+            </label>
+          </div>
+
+          <div class="th-group-title">内容区块 <span class="muted">勾选显隐，↑↓ 调整从上到下的排列顺序</span></div>
+          <div class="th-sections" id="thSections"></div>
+
+          <div class="th-group-title">封面 / 榜单列 / 页脚</div>
+          <div class="th-switch-grid">
+            <label class="th-switch"><input type="checkbox" id="thShowCover" checked><span>头部封面图</span></label>
+            <label class="th-switch"><input type="checkbox" id="thShowTopTexts" checked><span>高频弹幕榜</span></label>
+            <label class="th-switch"><input type="checkbox" id="thShowTopSc" checked><span>SC 贡献榜</span></label>
+            <label class="th-switch"><input type="checkbox" id="thShowTopMedals" checked><span>粉丝牌榜</span></label>
+            <label class="th-switch"><input type="checkbox" id="thShowFooter" checked><span>页脚说明</span></label>
+          </div>
+
+          <div class="th-group-title">指标卡显隐</div>
+          <div class="th-switch-grid" id="thCards"></div>
+
+          <div class="th-preview" id="thPreviewBox" hidden>
+            <div class="hint">预览基于内置样例数据，仅用于查看样式，不会保存或生成文件</div>
+            <img id="thPreviewImg" alt="战报样式预览">
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -313,7 +406,7 @@
 
 <!-- 直播战报弹窗 -->
 <div class="modal-mask" id="reportMask" hidden>
-  <div class="modal" style="width:min(720px,92vw)">
+  <div class="modal" style="width:min(860px,94vw)">
     <div class="modal-head">
       <span>单场直播战报</span>
       <button class="btn btn-sm" id="reportClose" type="button">关闭</button>
@@ -321,8 +414,13 @@
     <div class="modal-body nonmono" id="reportBody">
       <div class="muted">正在汇总…</div>
     </div>
+    <div class="report-img-wrap" id="reportImgWrap" hidden>
+      <img id="reportImg" alt="生成的战报 PNG 预览">
+    </div>
     <div class="modal-foot">
       <span class="hint" style="margin:0">营收=SC+金礼物；人气值为 B 站加权指标</span>
+      <a class="btn" id="reportOpenTab" target="_blank" rel="noopener" hidden>新标签页打开</a>
+      <a class="btn btn-primary" id="reportDownload" download hidden>下载 PNG</a>
       <button class="btn btn-primary" id="reportGen" style="margin-left:auto" type="button">生成 PNG 一页战报</button>
     </div>
   </div>

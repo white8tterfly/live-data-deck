@@ -18,6 +18,7 @@ from .config import Settings, SettingsStore, Target, TargetStore
 from .events import EventBus
 from .models import RoomRuntime
 from .room_task import record_room
+from .theme import ThemeStore
 
 SNAPSHOT_INTERVAL = 5
 START_STAGGER_SEC = 2.5     # 错峰启动，避免多房间同秒握手触发账号级风控
@@ -29,6 +30,7 @@ class RecorderManager:
         self.bus = EventBus()
         self.settings_store = SettingsStore()
         self.target_store = TargetStore()
+        self.theme_store = ThemeStore()
         self.settings: Settings = self.settings_store.settings
         self.tasks: dict[int, asyncio.Task] = {}
         self.runtimes: dict[int, RoomRuntime] = {}

@@ -1,6 +1,17 @@
 /* 弹幕墙 Web UI —— 原生 JS，无构建步骤 */
 'use strict';
 
+/* 主题尽早兜底：与 index.html 内联引导脚本同逻辑（内联脚本被某些预览环境拦截时生效，
+   正常浏览器中内联脚本已先执行，此处幂等） */
+(function applyInitialTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem('ldd-theme'); } catch (e) { /* 隐私模式忽略 */ }
+  const theme = saved === 'light' || saved === 'dark'
+    ? saved
+    : (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  document.documentElement.dataset.theme = theme;
+})();
+
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
@@ -44,6 +55,24 @@ function toast(msg, kind = 'info', ms = 3200) {
   setTimeout(() => el.remove(), ms);
 }
 
+/* ---------------- 日 / 夜主题 ---------------- */
+function currentTheme() {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try { localStorage.setItem('ldd-theme', theme); } catch (e) { /* 隐私模式忽略 */ }
+}
+(function initThemeToggle() {
+  const btn = $('#btnTheme');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const next = currentTheme() === 'light' ? 'dark' : 'light';
+    setTheme(next);
+    toast(next === 'light' ? '已切换到日间主题' : '已切换到夜间主题', 'ok', 1600);
+  });
+})();
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -73,7 +102,7 @@ function showView(name) {
   if (name === 'files') loadFiles();
   if (name === 'analysis') initAnalysisView();
   if (name === 'logs') renderLogs(true);
-  if (name === 'settings') { fillSettings(); loadCared(); }
+  if (name === 'settings') { fillSettings(); loadCared(); loadTheme(); }
 }
 
 $$('.nav-item').forEach((a) => a.addEventListener('click', () => showView(a.dataset.view)));
@@ -214,7 +243,7 @@ function roomCard(r) {
     </div>
     <div class="rc-title" title="${fmt.esc(r.title)}">${fmt.esc(r.title || '—')}</div>
     <div class="rc-meta">${meta.join(' · ') || '<span>未运行</span>'}</div>
-    ${r.last_error && !r.connected ? `<div class="rc-meta" style="color:#ff9aa5">⚠ ${fmt.esc(r.last_error)}</div>` : ''}
+    ${r.last_error && !r.connected ? `<div class="rc-meta" style="color:var(--danger-hi)">⚠ ${fmt.esc(r.last_error)}</div>` : ''}
     <div class="rc-stats">
       <div class="rc-stat"><b>${fmt.n(c.danmaku)}</b>弹幕</div>
       <div class="rc-stat sc"><b>${fmt.n(c.super_chat)}</b>SC</div>
@@ -590,6 +619,221 @@ $('#caredTable').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
+/* ---------------- 战报样式 ---------------- */
+let thData = null;
+
+async function loadTheme() {
+  try { thData = await api('/api/report-theme'); }
+  catch (err) { return; }  // 加载失败不阻断设置页其它功能
+  fillTheme();
+}
+
+function normHex(v) {
+  let s = String(v).trim();
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+    s = '#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+  }
+  return s.toUpperCase();
+}
+
+function validHex(v) {
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(v).trim());
+}
+
+function fillTheme() {
+  const { theme, meta } = thData;
+  $('#thColors').innerHTML = meta.colors.map((c) => `
+    <div class="th-color">
+      <input type="color" data-th-color="${c.key}" value="${(theme[c.key] || '#000000').toLowerCase()}">
+      <input type="text" class="input th-hex" data-th-hex="${c.key}"
+             value="${theme[c.key] || ''}" maxlength="7" spellcheck="false">
+      <span class="th-color-name">${c.label}</span>
+    </div>`).join('');
+  $('#thWidth').innerHTML =
+    meta.widths.map((w) => `<option value="${w}">${w} px</option>`).join('');
+  $('#thCardCols').innerHTML =
+    meta.card_cols.map((n) => `<option value="${n}">每行 ${n} 个</option>`).join('');
+  // font_scale=1.0 经 JSON 往返会变成数字 1，需按数值匹配 option
+  const fsSel = $('#thFontScale');
+  const fsOpt = Array.from(fsSel.options)
+    .find((o) => Number(o.value) === Number(theme.font_scale));
+  fsSel.value = fsOpt ? fsOpt.value : '1.0';
+  $('#thWidth').value = String(theme.width);
+  $('#thCardCols').value = String(theme.card_cols);
+  $('#thFontRegular').value = theme.font_regular || '';
+  $('#thFontBold').value = theme.font_bold || '';
+  $('#thBrand').value = theme.brand || '';
+  $('#thFooter').value = theme.footer_note || '';
+  $('#thShowCover').checked = theme.show_cover !== false;
+  $('#thShowTopTexts').checked = theme.show_top_texts !== false;
+  $('#thShowTopSc').checked = theme.show_top_sc !== false;
+  $('#thShowTopMedals').checked = theme.show_top_medals !== false;
+  $('#thShowFooter').checked = theme.show_footer !== false;
+  $('#thCards').innerHTML = meta.cards.map((c) => `
+    <label class="th-switch">
+      <input type="checkbox" data-th-card="${c.key}"
+             ${theme['card_' + c.key] !== false ? 'checked' : ''}>
+      <span>${c.label}</span>
+    </label>`).join('');
+  renderThSections();
+  $('#thResult').textContent = '';
+}
+
+function renderThSections() {
+  const labels = Object.fromEntries(
+    thData.meta.sections.map((s) => [s.key, s.label]));
+  const arr = thData.theme.sections;
+  $('#thSections').innerHTML = arr.map((key, i) => `
+    <div class="th-sec-row">
+      <label class="th-switch">
+        <input type="checkbox" data-th-sec="${key}"
+               ${thData.theme['show_' + key] !== false ? 'checked' : ''}>
+        <span>${labels[key] || key}</span>
+      </label>
+      <span class="th-order">
+        <button class="btn btn-sm" type="button" data-th-up="${key}"
+                ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button class="btn btn-sm" type="button" data-th-down="${key}"
+                ${i === arr.length - 1 ? 'disabled' : ''}>↓</button>
+      </span>
+    </div>`).join('');
+}
+
+function syncSectionChecks() {
+  $$('#thSections [data-th-sec]').forEach((cb) => {
+    thData.theme['show_' + cb.dataset.thSec] = cb.checked;
+  });
+}
+
+function collectTheme() {
+  const t = { ...thData.theme };
+  syncSectionChecks();
+  $$('#thColors [data-th-color]').forEach((inp) => {
+    t[inp.dataset.thColor] = normHex(inp.value);
+  });
+  t.font_regular = $('#thFontRegular').value.trim();
+  t.font_bold = $('#thFontBold').value.trim();
+  t.font_scale = Number($('#thFontScale').value);
+  t.width = Number($('#thWidth').value);
+  t.card_cols = Number($('#thCardCols').value);
+  t.brand = $('#thBrand').value.trim();
+  t.footer_note = $('#thFooter').value.trim();
+  t.show_cover = $('#thShowCover').checked;
+  t.show_top_texts = $('#thShowTopTexts').checked;
+  t.show_top_sc = $('#thShowTopSc').checked;
+  t.show_top_medals = $('#thShowTopMedals').checked;
+  t.show_footer = $('#thShowFooter').checked;
+  $$('#thCards [data-th-card]').forEach((cb) => {
+    t['card_' + cb.dataset.thCard] = cb.checked;
+  });
+  return t;
+}
+
+// 取色器 ↔ 十六进制文本双向联动
+$('#thColors').addEventListener('input', (e) => {
+  if (!e.target.matches('[data-th-color]')) return;
+  const key = e.target.dataset.thColor;
+  const hex = $(`#thColors [data-th-hex="${key}"]`);
+  hex.value = e.target.value.toUpperCase();
+  hex.classList.remove('bad');
+});
+$('#thColors').addEventListener('change', (e) => {
+  if (!e.target.matches('[data-th-hex]')) return;
+  const inp = e.target;
+  if (validHex(inp.value)) {
+    inp.value = normHex(inp.value);
+    $(`#thColors [data-th-color="${inp.dataset.thHex}"]`).value =
+      inp.value.toLowerCase();
+    inp.classList.remove('bad');
+  } else {
+    inp.classList.add('bad');
+  }
+});
+
+// 区块上移 / 下移
+$('#thSections').addEventListener('click', (e) => {
+  const up = e.target.closest('[data-th-up]');
+  const dn = e.target.closest('[data-th-down]');
+  if (!up && !dn) return;
+  syncSectionChecks();
+  const key = up ? up.dataset.thUp : dn.dataset.thDown;
+  const arr = thData.theme.sections;
+  const i = arr.indexOf(key);
+  const j = up ? i - 1 : i + 1;
+  if (i < 0 || j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  renderThSections();
+});
+
+// 配色预设（仅覆盖 12 个颜色，字体/排版/开关保持当前编辑态）
+$('.th-toolbar').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-th-preset]');
+  if (!b || !thData) return;
+  const preset = thData.presets[b.dataset.thPreset];
+  if (!preset) return;
+  $$('#thColors [data-th-color]').forEach((inp) => {
+    inp.value = normHex(preset[inp.dataset.thColor]).toLowerCase();
+  });
+  $$('#thColors [data-th-hex]').forEach((inp) => {
+    inp.value = normHex(preset[inp.dataset.thHex]);
+    inp.classList.remove('bad');
+  });
+  toast(`已套用${b.dataset.thPreset === 'light' ? '浅色' : '深色'}配色，确认后点击「保存样式」`, 'ok');
+});
+
+$('#btnThSave').addEventListener('click', async () => {
+  if ($$('#thColors .th-hex.bad').length) {
+    return toast('存在不合法的颜色值，应为 #RRGGBB 格式', 'err');
+  }
+  $('#thResult').textContent = '保存中…';
+  try {
+    const r = await api('/api/report-theme',
+      { method: 'PUT', body: collectTheme() });
+    thData.theme = r.theme;
+    fillTheme();
+    $('#thResult').textContent = '✅ 已保存，重新生成战报即按新样式渲染';
+    toast('战报样式已保存', 'ok');
+  } catch (err) {
+    $('#thResult').textContent = '❌ ' + err.message;
+    toast(err.message, 'err');
+  }
+});
+
+$('#btnThReset').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/report-theme', { method: 'DELETE' });
+    thData.theme = r.theme;
+    fillTheme();
+    $('#thResult').textContent = '已恢复并保存为默认样式';
+    toast('已恢复默认战报样式', 'ok');
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+$('#btnThPreview').addEventListener('click', async () => {
+  if ($$('#thColors .th-hex.bad').length) {
+    return toast('存在不合法的颜色值，应为 #RRGGBB 格式', 'err');
+  }
+  const btn = $('#btnThPreview');
+  btn.disabled = true; btn.textContent = '绘制中…';
+  try {
+    const res = await fetch('/api/report-theme/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(collectTheme()),
+    });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = (await res.json()).detail || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const img = $('#thPreviewImg');
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    img.src = url;
+    $('#thPreviewBox').hidden = false;
+  } catch (err) { toast(err.message, 'err'); }
+  finally { btn.disabled = false; btn.textContent = '生成预览'; }
+});
+
 /* ---------------- 数据分析 ---------------- */
 const ana = {
   files: null,
@@ -680,8 +924,7 @@ function vBars(data, opts = {}) {
   const step = Math.ceil(n / 12);
   const grid = [0.25, 0.5, 0.75, 1].map((p) => {
     const y = padT + (1 - p) * (H - padT - padB);
-    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"
-              stroke="#222a3b" stroke-width="1"/>
+    return `<line class="grid" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>
             <text x="${padL - 6}" y="${y + 3}" text-anchor="end">${Math.round(max * p)}</text>`;
   }).join('');
   const bars = data.map((d, i) => {
@@ -984,15 +1227,34 @@ $('#filesTable').addEventListener('click', (e) => {
 
 /* ---------------- 单场直播战报 ---------------- */
 let reportCur = null;
+let reportMeta = null;
+let reportBlobUrl = null;
+
+function resetReportImage() {
+  if (reportBlobUrl) { URL.revokeObjectURL(reportBlobUrl); reportBlobUrl = null; }
+  $('#reportImgWrap').hidden = true;
+  $('#reportImg').removeAttribute('src');
+  $('#reportDownload').hidden = true;
+  $('#reportOpenTab').hidden = true;
+  const gen = $('#reportGen');
+  gen.hidden = false;
+  gen.disabled = false;
+  gen.textContent = '生成 PNG 一页战报';
+}
+
+function safeFileName(s) {
+  return String(s ?? '').replace(/[\\/:*?"<>|]/g, '_').trim() || '战报';
+}
 
 async function openReport(kind, path) {
   reportCur = { kind, path };
+  reportMeta = null;
+  resetReportImage();
   $('#reportMask').hidden = false;
   $('#reportBody').innerHTML = '<div class="muted">正在汇总本场数据…</div>';
-  $('#reportGen').disabled = false;
-  $('#reportGen').textContent = '生成 PNG 一页战报';
   try {
     const s = await api('/api/report/summary', { method: 'POST', body: { path, kind } });
+    reportMeta = s;
     const dur = s.span_sec >= 3600
       ? `${(s.span_sec / 3600).toFixed(1)} 小时` : `${Math.round(s.span_sec / 60)} 分钟`;
     const row = (l, v, cls = '') => `<div class="dedup-stat ${cls}"><b>${v}</b>${l}</div>`;
@@ -1035,11 +1297,23 @@ $('#reportGen').addEventListener('click', async () => {
       body: JSON.stringify(reportCur),
     });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-    btn.textContent = '已生成（新标签页打开）';
+    const url = URL.createObjectURL(await res.blob());
+    if (reportBlobUrl) URL.revokeObjectURL(reportBlobUrl);
+    reportBlobUrl = url;
+    $('#reportImg').src = url;
+    $('#reportImgWrap').hidden = false;
+    const m = reportMeta || {};
+    $('#reportDownload').href = url;
+    $('#reportDownload').download =
+      `战报_${safeFileName(m.anchor || m.vup)}_${safeFileName(m.date)}.png`;
+    $('#reportOpenTab').href = url;
+    $('#reportDownload').hidden = false;
+    $('#reportOpenTab').hidden = false;
+    btn.disabled = false;
+    btn.textContent = '重新生成';
+    toast('战报已生成，可直接预览或下载 PNG', 'ok', 2400);
+    requestAnimationFrame(() =>
+      $('#reportImgWrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
   } catch (err) {
     btn.disabled = false; btn.textContent = '生成 PNG 一页战报';
     toast(err.message, 'err');

@@ -16,6 +16,9 @@ from recorder import report as report_mod
 from recorder.config import WEB_DIR
 from recorder.manager import RecorderManager
 from recorder.session import verify_sessdata
+from recorder.theme import (CARD_META, CARD_COLS_CHOICES, COLOR_META,
+                            FONT_SCALES, RANK_META, SECTION_META,
+                            ReportTheme, WIDTH_CHOICES, coerce_theme)
 from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
                             DedupIn, ReportIn, TargetIn, TargetPatch)
 
@@ -34,7 +37,7 @@ def create_app() -> FastAPI:
         finally:
             await mgr.shutdown()
 
-    app = FastAPI(title="B站直播弹幕录制器", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title="B站直播弹幕录制器", version="1.2.0", lifespan=lifespan)
 
     def mgr() -> RecorderManager:
         return app.state.mgr
@@ -243,6 +246,51 @@ def create_app() -> FastAPI:
             _do_dedup, body.path, body.kind, body.window_sec, True)
 
     # ---------------- 单场直播战报 ----------------
+    def _theme_payload():
+        store = mgr().theme_store
+        return {
+            "theme": store.theme.public_dict(),
+            "defaults": ReportTheme().public_dict(),
+            "presets": store.presets(),
+            "meta": {
+                "colors": [{"key": k, "label": l} for k, l in COLOR_META],
+                "sections": [{"key": k, "label": l} for k, l in SECTION_META],
+                "ranks": [{"key": k, "label": l} for k, l in RANK_META],
+                "cards": [{"key": k, "label": l} for k, l in CARD_META],
+                "font_scales": list(FONT_SCALES),
+                "widths": list(WIDTH_CHOICES),
+                "card_cols": list(CARD_COLS_CHOICES),
+            },
+        }
+
+    @app.get("/api/report-theme")
+    async def get_report_theme():
+        return _theme_payload()
+
+    @app.put("/api/report-theme")
+    async def put_report_theme(body: dict):
+        try:
+            th = mgr().theme_store.update(body)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"theme": th.public_dict()}
+
+    @app.delete("/api/report-theme")
+    async def reset_report_theme():
+        th = mgr().theme_store.reset()
+        return {"theme": th.public_dict()}
+
+    @app.post("/api/report-theme/preview")
+    async def preview_report_theme(body: dict):
+        """用提交的主题（不落盘）渲染内置样例战报，供设置页即时预览。"""
+        try:
+            th = coerce_theme(body, mgr().theme_store.theme)
+            png = await asyncio.to_thread(report_mod.render_demo_png, th)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return Response(content=png, media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
+
     def _build_summary(rel: str, kind: str) -> dict:
         src = _safe_file(kind, rel)
         s = report_mod.summarize_file(src)
@@ -268,7 +316,7 @@ def create_app() -> FastAPI:
             s = report_mod.summarize_file(src)
             report_mod.enrich_online(
                 s, mgr().settings_store.settings.effective_sessdata())
-            return report_mod.render_png(s)
+            return report_mod.render_png(s, theme=mgr().theme_store.theme)
         png = await asyncio.to_thread(gen)
         return Response(content=png, media_type="image/png",
                         headers={"Cache-Control": "no-store"})

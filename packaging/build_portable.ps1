@@ -1,6 +1,6 @@
-﻿# 直播数据舱 Windows 绿色版打包脚本（PowerShell 5 兼容）
+# 直播数据舱 Windows 绿色版打包脚本（PowerShell 5 兼容）
 # 用法（在项目根目录）：
-#   powershell -ExecutionPolicy Bypass -File packaging\build_portable.ps1 -Version 1.1.1
+#   powershell -ExecutionPolicy Bypass -File packaging\build_portable.ps1 -Version 1.2.0
 # 产物：dist\LiveDataDeck-<version>-windows-x64.zip
 # 注意：不会把 config\settings.json（含 SESSDATA）等本机配置打进包。
 param(
