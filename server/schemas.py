@@ -8,11 +8,13 @@ class TargetIn(BaseModel):
     room_id: int = Field(gt=0)
     vup: str = ""
     enabled: bool = True
+    record_video: bool = False
 
 
 class TargetPatch(BaseModel):
     vup: str | None = None
     enabled: bool | None = None
+    record_video: bool | None = None
 
 
 class TargetBulkItem(BaseModel):
@@ -54,3 +56,31 @@ class DedupBatchIn(BaseModel):
 class ReportIn(BaseModel):
     path: str
     kind: str = "records"
+
+
+class VideoCutIn(BaseModel):
+    vup: str = Field(min_length=1, max_length=120)
+    session: str = Field(min_length=1, max_length=80)   # meta 文件名前缀 base
+    part: str = Field(min_length=1, max_length=120)
+    start_sec: float = Field(ge=0, le=86400)
+    end_sec: float = Field(ge=0, le=86400)
+
+
+class VideoSessionIn(BaseModel):
+    vup: str = Field(min_length=1, max_length=120)
+    session: str = Field(min_length=1, max_length=80)
+
+
+class VideoAiIn(BaseModel):
+    vup: str = Field(min_length=1, max_length=120)
+    session: str = Field(min_length=1, max_length=80)
+    mode: str | None = None        # A / C；缺省用全局设置 llm_mode
+    force: bool = False            # 重新分析（忽略 ai.json 缓存）
+    window_sec: int = Field(default=60, ge=10, le=600)
+    top_n: int = Field(default=8, ge=1, le=20)
+
+
+class LlmTestIn(BaseModel):
+    base_url: str = Field(min_length=1, max_length=300)
+    api_key: str | None = None     # 留空则用已保存的 Key
+    model: str = Field(min_length=1, max_length=120)

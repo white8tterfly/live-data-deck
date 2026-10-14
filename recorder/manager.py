@@ -57,7 +57,9 @@ class RecorderManager:
         await self.bus.stop()
 
     def _make_rt(self, t: Target) -> RoomRuntime:
-        return RoomRuntime(room_id=t.room_id, vup=t.vup, enabled=t.enabled)
+        rt = RoomRuntime(room_id=t.room_id, vup=t.vup, enabled=t.enabled)
+        rt.record_video = t.record_video
+        return rt
 
     async def _snapshot_loop(self) -> None:
         while True:
@@ -67,11 +69,16 @@ class RecorderManager:
     # ---------- 房间 CRUD ----------
     async def add_target(self, room_id: int, vup: str,
                          enabled: bool = True, persist: bool = True,
-                         autostart: bool = True) -> Target:
+                         autostart: bool = True,
+                         record_video: bool = False) -> Target:
         if room_id in self.runtimes:
             raise ValueError(f"房间 {room_id} 已存在")
-        t = self.target_store.add(room_id, vup, enabled) if persist else \
-            Target(room_id=room_id, vup=vup or f"room_{room_id}", enabled=enabled)
+        if persist:
+            t = self.target_store.add(room_id, vup, enabled,
+                                      record_video=record_video)
+        else:
+            t = Target(room_id=room_id, vup=vup or f"room_{room_id}",
+                       enabled=enabled, record_video=record_video)
         self.runtimes[room_id] = self._make_rt(t)
         self.bus.log("info", f"已添加房间 {room_id}（{t.vup}）")
         if autostart and t.enabled:
@@ -113,12 +120,28 @@ class RecorderManager:
                 self.bus.log("error", f"房间 {rid} 启动失败：{e}")
 
     async def update_target(self, room_id: int, vup: str | None = None,
-                            enabled: bool | None = None) -> Target:
-        t = self.target_store.update(room_id, vup, enabled)
+                            enabled: bool | None = None,
+                            record_video: bool | None = None) -> Target:
+        t = self.target_store.update(room_id, vup, enabled,
+                                     record_video=record_video)
         rt = self.runtimes.get(room_id)
         if rt:
             rt.vup = t.vup
             rt.enabled = t.enabled
+            # 房间级视频开关：运行中动态生效，无需重启任务
+            if record_video is not None:
+                rt.record_video = t.record_video
+                if t.record_video and not self.settings.video_enabled:
+                    self.bus.log(
+                        "info",
+                        f"房间 {rt.vup} 已勾选视频录制，但全局视频开关未启用；"
+                        f"请在设置页开启（运行中的弹幕任务需重启后生效）",
+                        room_id)
+                else:
+                    self.bus.log(
+                        "info",
+                        f"房间 {rt.vup} 视频录制已{'开启' if t.record_video else '关闭'}"
+                        f"（下一场开播生效）", room_id)
         self.bus.emit("room_state", rt.snapshot() if rt else {})
         return t
 

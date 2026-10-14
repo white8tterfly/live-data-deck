@@ -23,6 +23,7 @@ const state = {
   logs: [],
   filesKind: 'records',
   files: [],
+  videos: { sessions: [], orphans: [], dir: '', ffmpeg: null },
   streamUnread: 0,
 };
 
@@ -40,8 +41,10 @@ const fmt = {
     b = Number(b) || 0;
     if (b < 1024) return b + ' B';
     if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
-    return (b / 1048576).toFixed(2) + ' MB';
+    if (b < 1073741824) return (b / 1048576).toFixed(2) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
   },
+  hm: (ts) => ts ? new Date(ts * 1000).toTimeString().slice(0, 5) : '--:--',
   esc: (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
 };
@@ -99,7 +102,9 @@ function showView(name) {
   if (name === 'stream') { state.streamUnread = 0; updateBadge(); }
   if (name === 'rooms') renderRoomTable();
   if (name === 'dashboard') renderRoomGrid();
-  if (name === 'files') loadFiles();
+  if (name === 'files') {
+    if (state.filesKind === 'videos') loadVideos(); else loadFiles();
+  }
   if (name === 'analysis') initAnalysisView();
   if (name === 'logs') renderLogs(true);
   if (name === 'settings') { fillSettings(); loadCared(); loadTheme(); }
@@ -161,6 +166,23 @@ function onEvent(type, data) {
     if (state.logs.length > 1000) state.logs.shift();
     if ($('#view-logs').classList.contains('active')) appendLogLine(data);
   }
+  if (type === 'video') {
+    const panel = $('#filesPanelVideos');
+    if (data.status === 'disk_low') {
+      toast(`磁盘剩余不足，房间 ${data.vup || data.room_id} 视频已自动停止（弹幕继续）`, 'warn', 6000);
+    }
+    if (data.status === 'ai_done') {
+      toast(`🤖 ${data.vup || ''} 场次 ${data.session || ''} AI 自动解读完成`, 'ok', 5000);
+      if (!$('#hlMask').hidden && hlCur.session === data.session) {
+        loadAiResult().then(renderHighlights);
+      }
+    }
+    if (panel && !panel.hidden && (data.status === 'session_start'
+        || data.status === 'session_end' || data.status === 'disk_low'
+        || data.status === 'ai_done')) {
+      loadVideos();
+    }
+  }
 }
 
 function applyState(s) {
@@ -193,6 +215,7 @@ const PHASE = {
   waiting: ['waiting', '等待开播'],
   stopped: ['stopped', '已停止'],
 };
+const QN_LABELS = { 10000: '原画', 400: '蓝光', 250: '超清', 150: '高清', 80: '流畅' };
 
 function renderStats(s) {
   $('#statRunning').textContent = fmt.n(s.running_count);
@@ -228,6 +251,12 @@ function roomCard(r) {
     }
   }
   if (r.current_file) meta.push(`文件 <b>${fmt.esc(r.current_file)}</b>`);
+  if (r.video_active) {
+    meta.push(`🎥 <b>${QN_LABELS[r.video_qn] || r.video_qn}</b> ${fmt.size(r.video_bytes)}`
+      + ` / ${fmt.dur(r.video_sec)}` + (r.video_segments > 1 ? ` / ${r.video_segments}段` : ''));
+  } else if (r.record_video) {
+    meta.push('🎥 视频待录');
+  }
   const running = r.phase === 'recording';
   return `
   <div class="room-card ${running ? 'recording' : ''}">
@@ -236,6 +265,8 @@ function roomCard(r) {
       <span class="rc-name" title="${fmt.esc(r.anchor_name || r.vup)}">${fmt.esc(r.anchor_name || r.vup)}</span>
       <span class="rc-room">${r.room_id}</span>
       <span class="rc-actions">
+        <a class="btn btn-sm" href="https://live.bilibili.com/${r.room_id}"
+           target="_blank" rel="noopener" title="在 B 站新标签页打开该直播间">进直播间</a>
         ${r.running
           ? `<button class="btn btn-sm btn-danger" data-stop="${r.room_id}">停止</button>`
           : `<button class="btn btn-sm btn-primary" data-start="${r.room_id}">开始</button>`}
@@ -284,11 +315,16 @@ function renderRoomTable() {
       <td>${fmt.esc(r.vup)}${r.anchor_name && r.anchor_name !== r.vup
           ? `<div class="hint" style="margin:0">${fmt.esc(r.anchor_name)}</div>` : ''}</td>
       <td><input type="checkbox" ${r.enabled ? 'checked' : ''} data-enabled="${r.room_id}"></td>
+      <td><input type="checkbox" ${r.record_video ? 'checked' : ''}
+          data-video="${r.room_id}"
+          title="为该房间单独开启视频直录（全局开关在设置页）"></td>
       <td>${fmt.n((r.counters || {}).danmaku)}</td>
       <td>
         ${r.running
           ? `<button class="btn btn-sm btn-danger" data-stop2="${r.room_id}">停止</button>`
           : `<button class="btn btn-sm btn-primary" data-start2="${r.room_id}">开始</button>`}
+        <a class="btn btn-sm" href="https://live.bilibili.com/${r.room_id}"
+           target="_blank" rel="noopener" title="在 B 站新标签页打开该直播间">进直播间</a>
         <button class="btn btn-sm btn-danger" data-del="${r.room_id}">删除</button>
       </td>
     </tr>`;
@@ -299,11 +335,17 @@ $('#btnAddRoom').addEventListener('click', async () => {
   const room_id = Number($('#addRoomId').value.trim());
   const vup = $('#addVup').value.trim();
   const enabled = $('#addEnabled').checked;
+  const record_video = $('#addRecordVideo').checked;
   if (!room_id || room_id <= 0) return toast('请填写正确的直播间号', 'warn');
   try {
-    await api('/api/targets', { method: 'POST', body: { room_id, vup, enabled } });
+    await api('/api/targets', {
+      method: 'POST',
+      body: { room_id, vup, enabled, record_video },
+    });
     $('#addRoomId').value = ''; $('#addVup').value = '';
-    toast(`房间 ${room_id} 已添加${enabled ? '并开始录制' : ''}`, 'ok');
+    $('#addRecordVideo').checked = false;
+    toast(`房间 ${room_id} 已添加${enabled ? '并开始录制' : ''}`
+      + (record_video ? '（含视频直录）' : ''), 'ok');
   } catch (err) { toast(err.message, 'err'); }
 });
 
@@ -324,12 +366,27 @@ $('#roomTable').addEventListener('click', async (e) => {
 
 $('#roomTable').addEventListener('change', async (e) => {
   const cb = e.target.closest('[data-enabled]');
-  if (!cb) return;
+  const vb = e.target.closest('[data-video]');
   try {
-    await api(`/api/targets/${cb.dataset.enabled}`,
-      { method: 'PUT', body: { enabled: cb.checked } });
-    toast(cb.checked ? '已启用' : '已停用（运行中的任务需手动停止）', 'ok');
-  } catch (err) { toast(err.message, 'err'); cb.checked = !cb.checked; }
+    if (cb) {
+      await api(`/api/targets/${cb.dataset.enabled}`,
+        { method: 'PUT', body: { enabled: cb.checked } });
+      toast(cb.checked ? '已启用' : '已停用（运行中的任务需手动停止）', 'ok');
+    }
+    if (vb) {
+      await api(`/api/targets/${vb.dataset.video}`,
+        { method: 'PUT', body: { record_video: vb.checked } });
+      if (vb.checked) {
+        toast('该房间已开启视频直录（全局开关开启时，下一场开播生效）', 'ok', 3600);
+      } else {
+        toast('该房间视频直录已关闭（正在录制的场次结束后停止）', 'ok', 3000);
+      }
+    }
+  } catch (err) {
+    toast(err.message, 'err');
+    if (cb) cb.checked = !cb.checked;
+    if (vb) vb.checked = !vb.checked;
+  }
 });
 
 /* ---------------- B 站关注列表导入 ---------------- */
@@ -607,7 +664,10 @@ function updateBadge() {
 $$('#view-files .tabs .tab').forEach((t) => t.addEventListener('click', () => {
   $$('#view-files .tabs .tab').forEach((x) => x.classList.toggle('active', x === t));
   state.filesKind = t.dataset.kind;
-  loadFiles();
+  const videoMode = state.filesKind === 'videos';
+  $('#filesPanelRecords').hidden = videoMode;
+  $('#filesPanelVideos').hidden = !videoMode;
+  if (videoMode) loadVideos(); else loadFiles();
 }));
 
 async function loadFiles() {
@@ -660,6 +720,444 @@ $('#previewMask').addEventListener('click', (e) => {
   if (e.target.id === 'previewMask') $('#previewMask').hidden = true;
 });
 
+/* ---------------- 视频场次 ---------------- */
+function videoDl(vup, file) {
+  return `/api/videos/download?vup=${encodeURIComponent(vup)}&file=${encodeURIComponent(file)}`;
+}
+
+async function loadVideos() {
+  let data;
+  try {
+    data = await api('/api/videos');
+  } catch (err) { toast(err.message, 'err'); return; }
+  state.videos = data;
+  $('#videoDirHint').textContent = data.dir ? `目录：${data.dir}` : '';
+  const ff = data.ffmpeg;
+  $('#videoFfmpegPill').innerHTML = ff
+    ? `<span class="tag ok">ffmpeg ${fmt.esc(ff.version || '已就绪')}</span>`
+    : '<span class="tag" title="秒切功能需要 ffmpeg">未检测到 ffmpeg（仍可复制跳转命令）</span>';
+  const ss = data.sessions || [];
+  $('#videosEmpty').hidden = ss.length > 0;
+  $('#videosTable').innerHTML = ss.map(videoRow).join('');
+  const orphans = data.orphans || [];
+  $('#videoOrphans').hidden = orphans.length === 0;
+  $('#videoOrphansTable').innerHTML = orphans.map((o) => `
+    <tr>
+      <td>${fmt.esc(o.vup)}</td>
+      <td class="mono">${fmt.esc(o.file)}</td>
+      <td>${fmt.size(o.size)}</td>
+      <td>
+        <a class="btn btn-sm" href="${videoDl(o.vup, o.file)}">下载</a>
+        <button class="btn btn-sm btn-danger" data-odel="${fmt.esc(o.vup)}"
+                data-ofile="${fmt.esc(o.file)}">删除</button>
+      </td>
+    </tr>`).join('');
+}
+
+function videoRow(s) {
+  const badges = [];
+  if (s.ongoing) badges.push('<span class="badge recording">录制中</span>');
+  badges.push(`<span class="tag">${fmt.esc(s.qn_label || (QN_LABELS[s.qn] || s.qn))}</span>`);
+  if (s.codec) badges.push(`<span class="tag">${fmt.esc(s.codec)}</span>`);
+  if (s.segment_count > 1) badges.push(`<span class="tag">${s.segment_count} 段</span>`);
+  if (s.ass) badges.push('<span class="tag ok">ASS 字幕</span>');
+  if (s.ai) badges.push(
+    `<span class="tag ai-badge" title="${fmt.esc(s.ai.summary || '已生成 AI 解读')}">🤖 AI ${fmt.esc(s.ai.mode || '')} · ${s.ai.picks || 0} 条</span>`);
+  if (s.recovered) badges.push('<span class="tag" style="color:var(--warn)" title="进程异常退出，分段为启动列表时自动认回">异常认回</span>');
+  if (s.end_reason === 'disk') badges.push('<span class="tag" style="color:var(--danger-hi)">磁盘止录</span>');
+  return `<tr>
+    <td>${fmt.esc(s.vup)}<div class="hint" style="margin:0">${fmt.esc(s.anchor_name || '')}</div></td>
+    <td>
+      <div class="mono" style="font-size:12.5px">${fmt.esc(s.base)}</div>
+      <div class="hint" style="margin:2px 0 0" title="${fmt.esc(s.title || '')}">${fmt.esc(s.title || '—')}</div>
+      <div style="margin-top:3px">${badges.join(' ')}</div>
+    </td>
+    <td>${fmt.size(s.bytes)}</td>
+    <td>${fmt.dur(s.duration_sec)}</td>
+    <td>${s.start_clock ? fmt.esc(s.start_clock) : '—'}</td>
+    <td>
+      <button class="btn btn-sm btn-primary" data-hl="${fmt.esc(s.base)}"
+              data-vup="${fmt.esc(s.vup)}">高能时间轴</button>
+      ${s.ass ? `<a class="btn btn-sm" href="${videoDl(s.vup, s.ass)}">ASS</a>` : ''}
+      ${s.ongoing ? '' : `<button class="btn btn-sm btn-danger" data-vdel="${fmt.esc(s.base)}"
+              data-vup="${fmt.esc(s.vup)}">删除</button>`}
+    </td>
+  </tr>`;
+}
+
+$('#btnVideoReload').addEventListener('click', loadVideos);
+
+$('#videosTable').addEventListener('click', (e) => {
+  const hl = e.target.closest('[data-hl]');
+  const del = e.target.closest('[data-vdel]');
+  if (hl) { openHighlights(hl.dataset.vup, hl.dataset.hl); return; }
+  if (del && confirm(`确认删除场次 ${del.dataset.vdel} 的全部视频/字幕/切片？\n该操作不可恢复，弹幕 jsonl 不受影响。`)) {
+    api(`/api/videos?vup=${encodeURIComponent(del.dataset.vup)}&session=${encodeURIComponent(del.dataset.vdel)}`,
+      { method: 'DELETE' })
+      .then(() => { toast('场次已删除', 'ok'); loadVideos(); })
+      .catch((err) => toast(err.message, 'err'));
+  }
+});
+
+$('#videoOrphansTable').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-odel]');
+  if (!b) return;
+  if (!confirm(`确认删除散片 ${b.dataset.ofile}？`)) return;
+  api(`/api/videos/file?vup=${encodeURIComponent(b.dataset.odel)}&file=${encodeURIComponent(b.dataset.ofile)}`,
+    { method: 'DELETE' })
+    .then(() => { toast('散片已删除', 'ok'); loadVideos(); })
+    .catch((err) => toast(err.message, 'err'));
+});
+
+/* 录制中的场次：面板可见时每 5s 刷新大小/时长 */
+setInterval(() => {
+  const panel = $('#filesPanelVideos');
+  if (!panel || panel.hidden) return;
+  if ((state.videos.sessions || []).some((s) => s.ongoing)) loadVideos();
+}, 5000);
+
+/* ---------------- 高能时间轴 ---------------- */
+const hlCur = { vup: '', session: '', data: null, ai: null };
+
+async function openHighlights(vup, session) {
+  hlCur.vup = vup;
+  hlCur.session = session;
+  hlCur.data = null;
+  hlCur.ai = null;
+  $('#hlTitle').textContent = `高能时间轴 · ${vup} · ${session}`;
+  // 弹窗模式默认跟随全局设置
+  const lm = (state.settings && state.settings.llm_mode === 'C') ? 'C' : 'A';
+  $('#hlAiMode').value = lm;
+  $('#hlMask').hidden = false;
+  await loadHighlights();
+  await loadAiResult();
+  renderHighlights();
+}
+
+async function loadAiResult() {
+  try {
+    const q = `vup=${encodeURIComponent(hlCur.vup)}&session=${encodeURIComponent(hlCur.session)}`;
+    hlCur.ai = await api(`/api/videos/ai-result?${q}`);
+    if (hlCur.ai && hlCur.ai.mode) $('#hlAiMode').value = hlCur.ai.mode;
+    return true;
+  } catch (_) {
+    hlCur.ai = null;  // 404 = 还没解读过，静默
+    return false;
+  }
+}
+
+async function runAi(force) {
+  if (!hlCur.data) { toast('弹幕数据尚未加载完成', 'warn'); return; }
+  const btn = $('#hlAiRun');
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = force ? 'AI 重新分析中…' : 'AI 分析中…（C 档约 1–2 分钟）';
+  try {
+    hlCur.ai = await api('/api/videos/ai-analyze', {
+      method: 'POST',
+      body: {
+        vup: hlCur.vup,
+        session: hlCur.session,
+        mode: $('#hlAiMode').value,
+        force,
+        window_sec: Number($('#hlWindow').value) || 60,
+        top_n: Number($('#hlTopN').value) || 8,
+      },
+    });
+    renderHighlights();
+    toast(force ? 'AI 重新分析完成' : '🤖 AI 解读完成', 'ok');
+    loadVideos();
+  } catch (err) {
+    toast('AI 解读失败：' + err.message, 'err', 6000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
+}
+
+async function loadHighlights() {
+  const win = $('#hlWindow').value;
+  const top = $('#hlTopN').value;
+  $('#hlBody').innerHTML = '<div class="muted">正在扫描弹幕/SC/人气数据…</div>';
+  try {
+    const q = `vup=${encodeURIComponent(hlCur.vup)}&session=${encodeURIComponent(hlCur.session)}`
+      + `&window_sec=${win}&top_n=${top}`;
+    hlCur.data = await api(`/api/videos/highlights?${q}`);
+    renderHighlights();
+  } catch (err) {
+    $('#hlBody').innerHTML = `<div style="color:var(--danger)">分析失败：${fmt.esc(err.message)}</div>`;
+  }
+}
+
+function hlTimeline(d) {
+  const tl = d.timeline || [];
+  if (!tl.length) return '';
+  const maxDm = Math.max(1, ...tl.map((b) => b.dm));
+  const winSet = new Set();
+  (d.windows || []).forEach((w) => {
+    for (let t = w.start_ts; t < w.end_ts; t += d.window_sec) {
+      winSet.add(Math.floor(t / d.window_sec) * d.window_sec);
+    }
+  });
+  const start0 = tl[0].ts;
+  const span = Math.max(1, tl[tl.length - 1].ts + d.window_sec - start0);
+  const bars = tl.map((b) => {
+    const h = Math.max(2, Math.round(b.dm / maxDm * 100));
+    const hot = winSet.has(b.ts);
+    const sc = b.sc > 0;
+    return `<div class="hl-bar ${hot ? 'hot' : ''} ${sc ? 'has-sc' : ''}"
+      style="height:${h}%"
+      title="${fmtClock(b.ts)} 弹幕 ${b.dm}${b.sc ? ' · SC ' + b.sc : ''}${b.slope ? ' · 人气+' + fmt.n(b.slope) : ''}"></div>`;
+  }).join('');
+  return `<div class="hl-timeline"><div class="hl-bars">${bars}</div>
+    <div class="hl-axis"><span>${fmtClock(start0)}</span>
+    <span>${fmtClock(start0 + span)}</span></div>
+    <div class="hint" style="margin:4px 0 0">
+    柱高=该窗口弹幕密度；金色柱含 SC；红色描边=入选高能窗口（共 ${tl.length} 个 ${d.window_sec}s 窗口）</div></div>`;
+}
+
+function fmtClock(ts) {
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function aiPickForStart(startTs) {
+  const ai = hlCur.ai;
+  if (!ai) return null;
+  const target = Math.floor(Number(startTs));
+  return (ai.picks || []).find(
+    (p) => Math.abs(Math.floor(Number(p.start_ts)) - target) <= 1) || null;
+}
+
+function aiPickBlock(p) {
+  if (!p) return '';
+  return `<div class="ai-pick">
+    <div class="ai-pick-title">🤖 ${fmt.esc(p.title)}</div>
+    <div class="ai-pick-tags">
+      <span class="hl-tag ai">${fmt.esc(p.category || '其他')}</span>
+      ${p.cover ? `<span class="ai-cover">封面大字：<b>${fmt.esc(p.cover)}</b></span>` : ''}
+      <span class="muted">建议切点：起点前 ${p.pad_before}s · 终点后 ${p.pad_after}s</span>
+    </div>
+    <div class="ai-reason">${fmt.esc(p.reason)}</div>
+    ${p.intro ? `<div class="ai-intro">🎬 口播开场：${fmt.esc(p.intro)}</div>` : ''}
+  </div>`;
+}
+
+function aiCutButton(p, seek, cutId, resId, label) {
+  const ff = hlCur.data.ffmpeg && hlCur.data.ffmpeg.available;
+  if (!ff || !seek || !seek.part) return '';
+  const ss = Math.max(0, Number((seek.start_sec - (p ? p.pad_before : 0)).toFixed(1)));
+  const to = Number((seek.end_sec + (p ? p.pad_after : 0)).toFixed(1));
+  return `<button class="btn btn-sm btn-primary" data-cut="${cutId}"
+      data-resid="${resId}"
+      data-vup="${fmt.esc(hlCur.vup)}" data-session="${fmt.esc(hlCur.session)}"
+      data-part="${fmt.esc(seek.part)}" data-ss="${ss}" data-to="${to}">${label}</button>
+    <span class="hl-cut-result" id="${resId}"></span>`;
+}
+
+function aiSummaryBox() {
+  const ai = hlCur.ai;
+  if (!ai) return '';
+  const when = ai.ts
+    ? new Date(ai.ts * 1000).toLocaleString('zh-CN', { hour12: false }) : '';
+  const rank = (ai.picks || []).map((p, i) =>
+    `<li><b>${i + 1}. ${fmt.esc(p.title)}</b>`
+    + `<span class="muted">${fmtClock(p.start_ts)} · ${fmt.esc(p.category || '')}`
+    + `${p.source === 'ai' ? ' · AI 补漏' : ''}</span></li>`).join('');
+  return `<div class="ai-box">
+    <div class="ai-box-head">
+      <b>🤖 AI 解读结果</b>
+      <span class="hl-tag ai">${ai.mode === 'C' ? 'C 深度策划' : 'A 轻量解读'}</span>
+      <span class="muted">${fmt.esc(ai.model || '')} · ${when}</span>
+      <button class="btn btn-sm" id="hlAiRerun" type="button">重新分析（会再次计费）</button>
+    </div>
+    <div class="ai-summary">整场总结：${fmt.esc(ai.summary || '')}</div>
+    ${rank ? `<ol class="ai-rank">${rank}</ol>` : ''}
+  </div>`;
+}
+
+function aiExtraCards() {
+  const ai = hlCur.ai;
+  const wins = (ai && ai.extra_windows) || [];
+  if (!wins.length) return '';
+  const cards = wins.map((w, j) => {
+    const seek = w.seek || {};
+    const cmds = seek.commands || {};
+    const pick = aiPickForStart(w.start_ts);
+    const phrases = (w.top_phrases || []).map((p) =>
+      `<span class="hl-phrase">${fmt.esc(p.text)} <b>×${p.count}</b></span>`).join('');
+    const samples = (w.samples || []).map((s) =>
+      `<div class="ps-line"><span class="ps-time">${fmt.hm(s.ts)}</span>`
+      + `<b>${fmt.esc(s.uname || '匿名')}：</b>${fmt.esc(s.text)}</div>`).join('');
+    return `<div class="hl-card ai-extra">
+      <div class="hl-head">
+        <span class="hl-rank ai">AI 补漏</span>
+        <span class="hl-clock">${fmtClock(w.start_ts)}</span>
+        <span class="hl-tag ai">5 分钟段</span>
+        <span class="muted">弹幕 ${fmt.n(w.danmaku)}${w.super_chat ? ` · SC ${w.super_chat}` : ''}
+          · ${w.users} 人</span>
+        <span class="muted" style="margin-left:auto">${fmt.esc(seek.part || '—')}
+          ${seek.part ? `· 偏移 ${Math.round(seek.start_sec)}s` : ''}</span>
+      </div>
+      ${w.ai_why ? `<div class="ai-reason">🔍 入选理由：${fmt.esc(w.ai_why)}</div>` : ''}
+      ${aiPickBlock(pick)}
+      ${phrases ? `<div class="hl-phrases">${phrases}</div>` : ''}
+      ${samples ? `<details class="hl-samples"><summary>代表弹幕（${w.samples.length}）</summary>${samples}</details>` : ''}
+      <div class="hl-actions">
+        <button class="btn btn-sm" data-cmd="${encodeURIComponent(cmds.vlc || '')}">复制 VLC 跳转</button>
+        <button class="btn btn-sm" data-cmd="${encodeURIComponent(cmds.ffplay || '')}">复制 ffplay 跳转</button>
+        ${aiCutButton(pick, seek, `x${j}`, `hlCutx${j}`,
+          pick ? '按 AI 建议切点秒切' : 'ffmpeg 秒切这 5 分钟')}
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="panel-title" style="font-size:14px;margin:14px 0 8px">
+      🤖 AI 补漏窗口（规则密度信号未覆盖，共 ${wins.length} 个）</div>${cards}`;
+}
+
+function renderHighlights() {
+  const d = hlCur.data;
+  const ff = d.ffmpeg && d.ffmpeg.available;
+  const t = d.totals || {};
+  const head = `
+    <div class="hl-summary">
+      <div class="dedup-stat"><b>${fmt.n(t.danmaku)}</b>弹幕</div>
+      <div class="dedup-stat"><b>${fmt.n(t.super_chat)}</b>SC</div>
+      <div class="dedup-stat"><b>${fmt.n(t.max_dm_per_window)}</b>单窗峰值弹幕</div>
+      <div class="dedup-stat"><b>${d.window_sec}s</b>窗口 / Top ${(d.windows || []).length}</div>
+    </div>
+    ${ff ? '' : '<div class="warn-box" style="margin:8px 0">未检测到 ffmpeg：无法在页面内「秒切」，但仍可复制 VLC/ffplay 跳转命令，或自行安装 ffmpeg 并加入 PATH 后刷新。</div>'}
+    ${d.jsonl_exists ? '' : '<div class="warn-box" style="margin:8px 0">未找到同日弹幕 jsonl，高能检测无数据可用（视频本身不受影响）。</div>'}
+    ${d.note ? `<div class="muted">${fmt.esc(d.note)}</div>` : ''}
+    ${aiSummaryBox()}
+    ${hlTimeline(d)}`;
+  const cards = (d.windows || []).map((w, i) => {
+    const seek = w.seek || {};
+    const cmds = seek.commands || {};
+    const pick = aiPickForStart(w.start_ts);
+    const phrases = (w.top_phrases || []).map((p) =>
+      `<span class="hl-phrase">${fmt.esc(p.text)} <b>×${p.count}</b></span>`).join('');
+    const samples = (w.samples || []).map((s) =>
+      `<div class="ps-line"><span class="ps-time">${fmt.hm(s.ts)}</span>`
+      + `<b>${fmt.esc(s.uname || '匿名')}：</b>${fmt.esc(s.text)}</div>`).join('');
+    const tags = w.tags.map((x) => `<span class="hl-tag">${fmt.esc(x)}</span>`).join('');
+    const cutLabel = seek.cross_part ? '秒切（本段部分，窗口跨分段）' : 'ffmpeg 无损秒切这段';
+    return `<div class="hl-card">
+      <div class="hl-head">
+        <span class="hl-rank">#${i + 1}</span>
+        <span class="hl-clock">${fmtClock(w.start_ts)}</span>
+        <span class="hl-score">${w.score} 分</span>
+        ${tags}
+        <span class="muted">弹幕 ${fmt.n(w.danmaku)}${w.super_chat ? ` · SC ${w.super_chat} / ¥${fmt.n(w.sc_amount)}` : ''}
+          ${w.pop_slope ? ` · 人气 +${fmt.n(w.pop_slope)}` : ''} · ${w.users} 人</span>
+        <span class="muted" style="margin-left:auto">${fmt.esc(seek.part || '—')}
+          ${seek.part ? `· 偏移 ${Math.round(seek.start_sec)}s` : ''}
+          ${seek.cross_part ? '· ⚠跨分段' : ''}</span>
+      </div>
+      ${aiPickBlock(pick)}
+      ${phrases ? `<div class="hl-phrases">${phrases}</div>` : ''}
+      ${samples ? `<details class="hl-samples"><summary>代表弹幕（${w.samples.length}）</summary>${samples}</details>` : ''}
+      <div class="hl-actions">
+        <button class="btn btn-sm" data-cmd="${encodeURIComponent(cmds.vlc || '')}">复制 VLC 跳转</button>
+        <button class="btn btn-sm" data-cmd="${encodeURIComponent(cmds.ffplay || '')}">复制 ffplay 跳转</button>
+        ${ff && seek.part
+          ? `<button class="btn btn-sm" data-cut="${i}"
+              data-vup="${fmt.esc(hlCur.vup)}" data-session="${fmt.esc(hlCur.session)}"
+              data-part="${fmt.esc(seek.part)}" data-ss="${seek.start_sec}" data-to="${seek.end_sec}">
+              ${cutLabel}</button>
+            <span class="hl-cut-result" id="hlCut${i}"></span>`
+          : ''}
+        ${aiCutButton(pick, seek, i, `hlAiCut${i}`, '🤖 按 AI 建议切点秒切')}
+      </div>
+      <details class="hl-cmdbox"><summary>命令行详情</summary>
+        <label>VLC（本机终端执行）<input class="input mono" readonly value="${fmt.esc(cmds.vlc || '')}"></label>
+        <label>ffplay<input class="input mono" readonly value="${fmt.esc(cmds.ffplay || '')}"></label>
+        ${cmds.ffmpeg_copy ? `<label>ffmpeg 手动秒切<input class="input mono" readonly value="${fmt.esc(cmds.ffmpeg_copy)}"></label>` : ''}
+        <div class="hint">${fmt.esc(cmds.tip || '')}</div>
+      </details>
+    </div>`;
+  }).join('');
+
+  const segRows = (() => {
+    // 场次分段信息来自列表接口；用当前已知 session 再拉一次列表太重，改为分析结果不含分段，
+    // 分段下载通过下方刷新列表完成。这里展示窗口所在 part 的下载入口。
+    const parts = [...new Set((d.windows || []).map((w) => w.seek && w.seek.part).filter(Boolean))];
+    return parts.map((f) => `<a class="btn btn-sm" href="${videoDl(hlCur.vup, f)}">下载 ${fmt.esc(f)}</a>`).join(' ');
+  })();
+
+  $('#hlBody').innerHTML = head
+    + `<div class="panel-title" style="font-size:14px;margin:12px 0 8px">高能窗口</div>`
+    + (cards || '<div class="muted">未检测到显著高能窗口，可尝试调大窗口或降低 Top 门槛；C 档 AI 也可能补到规则漏掉的片段。</div>')
+    + aiExtraCards()
+    + `<div class="hl-files">
+        <div class="panel-title" style="font-size:13px">相关文件</div>
+        <div class="hint">高能窗口所在分段：${segRows || '无'}</div>
+        <div class="hint">完整分段、ASS 字幕与已切片段请在视频列表行内下载；删除场次也在列表页操作。</div>
+      </div>`;
+}
+
+$('#hlClose').addEventListener('click', () => { $('#hlMask').hidden = true; });
+$('#hlMask').addEventListener('click', (e) => {
+  if (e.target.id === 'hlMask') $('#hlMask').hidden = true;
+});
+$('#hlReanalyze').addEventListener('click', loadHighlights);
+$('#hlAiRun').addEventListener('click', () => runAi(false));
+$('#hlRegenAss').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/videos/regenerate-ass', {
+      method: 'POST',
+      body: { vup: hlCur.vup, session: hlCur.session },
+    });
+    toast(`字幕已重新生成：${r.ass}`, 'ok');
+    loadVideos();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+$('#hlBody').addEventListener('click', async (e) => {
+  if (e.target.closest('#hlAiRerun')) {
+    if (confirm('重新分析会再次调用模型并产生费用，确定继续？')) runAi(true);
+    return;
+  }
+  const copyBtn = e.target.closest('[data-cmd]');
+  const cutBtn = e.target.closest('[data-cut]');
+  if (copyBtn) {
+    const cmd = decodeURIComponent(copyBtn.dataset.cmd || '');
+    if (!cmd) return toast('命令不可用', 'warn');
+    try {
+      await navigator.clipboard.writeText(cmd);
+      toast('命令已复制，在本机 PowerShell 中粘贴执行即可跳转到高能时刻', 'ok', 3600);
+    } catch (_) { toast('复制失败，请手动展开命令行详情复制', 'warn'); }
+    return;
+  }
+  if (cutBtn) {
+    const box = $('#' + (cutBtn.dataset.resid || 'hlCut' + cutBtn.dataset.cut));
+    cutBtn.disabled = true;
+    const old = cutBtn.textContent;
+    cutBtn.textContent = '秒切中…';
+    box.textContent = '';
+    try {
+      const r = await api('/api/videos/cut', {
+        method: 'POST',
+        body: {
+          vup: cutBtn.dataset.vup,
+          session: cutBtn.dataset.session,
+          part: cutBtn.dataset.part,
+          start_sec: Number(cutBtn.dataset.ss),
+          end_sec: Number(cutBtn.dataset.to),
+        },
+      });
+      box.innerHTML = `✅ 已生成 <a href="${videoDl(cutBtn.dataset.vup, r.file)}" target="_blank">${fmt.esc(r.file)}</a>（${fmt.size(r.size)}，流拷贝无损）`;
+      toast('秒切完成', 'ok');
+      loadVideos();
+    } catch (err) {
+      box.textContent = '❌ ' + err.message;
+      cutBtn.disabled = false;
+      cutBtn.textContent = old;
+    }
+  }
+});
+
 /* ---------------- 日志 ---------------- */
 function logLevels() {
   return new Set($$('.terminal-bar input:checked').map((i) => i.dataset.level));
@@ -705,6 +1203,26 @@ function fillSettings() {
   $('#swAutoStart').checked = s.auto_start !== false;
   $('#setPoll').value = s.offline_poll_sec || 45;
   $('#setIdle').value = s.idle_stop_minutes ?? 0;
+  $('#swVideoEnabled').checked = !!s.video_enabled;
+  const qnSel = $('#setVideoQn');
+  const qnVal = String(s.video_qn ?? 10000);
+  qnSel.value = [...qnSel.options].some((o) => o.value === qnVal) ? qnVal : '10000';
+  $('#setVideoMinFree').value = s.video_min_free_gb ?? 5;
+  $('#videoDirEff').textContent = (s.data_dir_effective || '—')
+    + '\\' + (s.video_subdir || 'video');
+  // AI 高能解读
+  $('#swLlmAuto').checked = !!s.llm_auto_analyze;
+  $('#setLlmBase').value = s.llm_base_url || '';
+  $('#setLlmKey').value = '';
+  $('#setLlmModel').value = s.llm_model || '';
+  const lm = s.llm_mode === 'C' ? 'C' : 'A';
+  const lmRadio = document.querySelector(`input[name="llmMode"][value="${lm}"]`);
+  if (lmRadio) lmRadio.checked = true;
+  $('#llmKeyTag').textContent = s.llm_key_set ? '已保存' : '未配置';
+  $('#llmKeyTag').className = 'tag' + (s.llm_key_set ? ' ok' : '');
+  $('#setLlmKey').placeholder = s.llm_key_set
+    ? '已保存 Key，留空保存则保持不变' : '填写 API Key（仅存本机服务端，不回显）';
+  $('#llmTestResult').textContent = '';
   $('#saveResult').textContent = '';
 }
 
@@ -730,8 +1248,47 @@ $('#btnTestCookie').addEventListener('click', async () => {
   } catch (err) { $('#cookieResult').textContent = '❌ ' + err.message; }
 });
 
+$('#toggleLlmKey').addEventListener('click', () => {
+  const i = $('#setLlmKey');
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  $('#toggleLlmKey').textContent = show ? '隐藏' : '显示';
+});
+
+$('#llmPresets').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-base]');
+  if (!b) return;
+  $('#setLlmBase').value = b.dataset.base;
+  $('#setLlmModel').value = b.dataset.model;
+  $('#llmTestResult').textContent = `已填充 ${b.textContent.trim()} 模板，本地 Ollama 的 Key 可随意填（如 ollama）`;
+});
+
+$('#btnTestLlm').addEventListener('click', async () => {
+  const base = $('#setLlmBase').value.trim();
+  const model = $('#setLlmModel').value.trim();
+  const key = $('#setLlmKey').value.trim();
+  const out = $('#llmTestResult');
+  if (!base || !model) {
+    out.textContent = '❌ 请先填写（或点模板填充）Base URL 与模型名';
+    return;
+  }
+  out.textContent = '连接中…';
+  try {
+    const body = { base_url: base, model };
+    if (key) body.api_key = key;   // 留空则后端用已保存的 Key
+    const r = await api('/api/settings/test-llm', { method: 'POST', body });
+    if (r.ok) {
+      out.innerHTML = `✅ 连通（${r.latency_ms}ms）模型回复：${fmt.esc(r.reply || '正常')}`;
+    } else {
+      out.textContent = '❌ ' + (r.message || '连接失败');
+    }
+  } catch (err) { out.textContent = '❌ ' + err.message; }
+});
+
 $('#btnSaveSettings').addEventListener('click', async () => {
   const sess = $('#setSess').value.trim();
+  const llmKey = $('#setLlmKey').value.trim();
+  const llmMode = (document.querySelector('input[name="llmMode"]:checked') || {}).value || 'A';
   const patch = {
     anon_salt: $('#setSalt').value.trim(),
     data_dir: $('#setDataDir').value.trim(),
@@ -743,8 +1300,16 @@ $('#btnSaveSettings').addEventListener('click', async () => {
     auto_start: $('#swAutoStart').checked,
     offline_poll_sec: Number($('#setPoll').value) || 45,
     idle_stop_minutes: Number($('#setIdle').value) || 0,
+    video_enabled: $('#swVideoEnabled').checked,
+    video_qn: Number($('#setVideoQn').value) || 10000,
+    video_min_free_gb: Number($('#setVideoMinFree').value) || 5,
+    llm_auto_analyze: $('#swLlmAuto').checked,
+    llm_base_url: $('#setLlmBase').value.trim(),
+    llm_model: $('#setLlmModel').value.trim(),
+    llm_mode: llmMode,
   };
   if (sess) patch.sessdata = sess;
+  if (llmKey) patch.llm_api_key = llmKey;
   $('#saveResult').textContent = '保存中…';
   try {
     await api('/api/settings', { method: 'PUT', body: patch });

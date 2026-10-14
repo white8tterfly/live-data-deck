@@ -63,7 +63,8 @@
     <div class="sidebar-foot">
       <div class="ws-dot" id="wsDot" title="实时连接状态"></div>
       <span id="wsText">连接中…</span>
-      <span class="version">v1.2.0</span>
+      <span class="version"
+            title="本工具为独立开源项目，与哔哩哔哩（B站/bilibili）无任何隶属、合作或背书关系">非官方 · v1.4.0</span>
     </div>
   </aside>
 
@@ -152,6 +153,10 @@
             <span>启用</span>
             <input type="checkbox" id="addEnabled" checked>
           </label>
+          <label class="switch-line" title="同时录制直播视频（附加功能，默认关闭；需设置页开启全局视频开关）">
+            <span>🎥 视频</span>
+            <input type="checkbox" id="addRecordVideo">
+          </label>
           <button class="btn btn-primary" id="btnAddRoom">添加并录制</button>
         </div>
       </div>
@@ -160,8 +165,9 @@
         <table class="table">
           <thead><tr>
             <th style="width:90px">状态</th><th style="width:130px">房间号</th>
-            <th>名称 / 目录</th><th style="width:90px">启用</th>
-            <th style="width:110px">弹幕数</th><th style="width:190px">操作</th>
+            <th>名称 / 目录</th><th style="width:80px">启用</th>
+            <th style="width:80px" title="为该房间单独开启视频直录">🎥 视频</th>
+            <th style="width:100px">弹幕数</th><th style="width:260px">操作</th>
           </tr></thead>
           <tbody id="roomTable"></tbody>
         </table>
@@ -176,8 +182,9 @@
       <div class="tabs">
         <button class="tab active" data-kind="records">弹幕记录</button>
         <button class="tab" data-kind="weak">房管处置弱标签</button>
+        <button class="tab" data-kind="videos">🎥 视频录制</button>
       </div>
-      <div class="panel">
+      <div class="panel" id="filesPanelRecords">
         <table class="table">
           <thead><tr>
             <th>主播目录</th><th>文件</th><th style="width:110px">大小</th>
@@ -187,6 +194,37 @@
         </table>
         <div class="empty soft" id="filesEmpty" hidden>
           <p>暂无录制文件（真实开播后才会落盘）</p>
+        </div>
+      </div>
+      <div class="panel" id="filesPanelVideos" hidden>
+        <div class="video-toolbar">
+          <span class="muted" id="videoDirHint"></span>
+          <span class="toolbar-spacer"></span>
+          <span class="ffmpeg-pill" id="videoFfmpegPill"></span>
+          <button class="btn btn-sm" id="btnVideoReload" type="button">刷新</button>
+        </div>
+        <table class="table">
+          <thead><tr>
+            <th style="width:130px">主播</th><th>场次</th>
+            <th style="width:100px">大小</th><th style="width:90px">时长</th>
+            <th style="width:150px">开播时间</th><th style="width:250px">操作</th>
+          </tr></thead>
+          <tbody id="videosTable"></tbody>
+        </table>
+        <div class="empty soft" id="videosEmpty" hidden>
+          <div class="empty-icon">🎥</div>
+          <p>暂无视频场次</p>
+          <p class="muted">在「房间管理」为房间勾选 🎥视频，并在「设置」开启全局视频开关后，开播即自动直录 FLV</p>
+        </div>
+        <div id="videoOrphans" hidden style="margin-top:14px">
+          <div class="panel-title" style="font-size:13px">散片（无场次信息，可能来自异常中断）</div>
+          <table class="table">
+            <thead><tr>
+              <th style="width:130px">主播</th><th>文件</th>
+              <th style="width:100px">大小</th><th style="width:150px">操作</th>
+            </tr></thead>
+            <tbody id="videoOrphansTable"></tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -309,6 +347,120 @@
           <div class="switch-row"><div><div class="sw-title">启动服务即自动录制</div>
             <div class="hint">启动后自动连接所有「启用」的房间</div></div>
             <input type="checkbox" id="swAutoStart" checked></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">🎥 视频直录 <span class="muted">附加功能，默认关闭</span></div>
+          <div class="switch-row"><div><div class="sw-title">启用视频直录（全局总开关）</div>
+            <div class="hint">开启后，已勾选「🎥视频」的房间开播时会额外直录直播流；与弹幕录制互不影响</div></div>
+            <input type="checkbox" id="swVideoEnabled"></div>
+          <div class="form-row">
+            <label>默认画质</label>
+            <select class="input" id="setVideoQn" style="max-width:220px">
+              <option value="10000">原画（约 1.4–3.6 GB/小时）</option>
+              <option value="400">蓝光（约 1.0–2.0 GB/小时）</option>
+              <option value="250">超清（约 0.4–0.7 GB/小时）</option>
+              <option value="150">高清（更省空间）</option>
+              <option value="80">流畅（最省空间）</option>
+            </select>
+            <div class="hint">B 站按权限实际下发：<b>游客（未填 SESSDATA）会被自动降为超清</b>，
+              配置有效登录凭证后才可录原画；无 HEVC 授权时自动回退可用编码。</div>
+          </div>
+          <div class="form-row">
+            <label>磁盘剩余空间下限（GB）</label>
+            <input class="input" id="setVideoMinFree" type="number" min="1" max="1000" value="5" style="max-width:160px">
+            <div class="hint">所在磁盘剩余低于该值时，正在录制的视频会<b>自动停止并告警</b>，5 分钟后复检；
+              弹幕录制不受影响。</div>
+          </div>
+          <div class="form-row">
+            <label>视频保存目录</label>
+            <div class="hint">生效路径：<code id="videoDirEff">—</code>（按主播分目录，文件名与弹幕 jsonl 同日对齐）</div>
+          </div>
+          <div class="guide-lock" style="margin-top:6px">
+            产物说明：每场生成 ① 纯净 FLV（供剪辑，绝不烧录弹幕）② 旁挂 ASS 弹幕字幕（VLC/mpv 可开关）
+            ③ 场次元数据；断线自动分段，重连不拼接。「录制文件 → 视频录制」页提供高能时间轴、
+            播放器跳转命令与 ffmpeg 无损秒切（需自行安装 ffmpeg 并加入 PATH）。
+          </div>
+          <div class="warn-box">
+            ⚠ 磁盘与带宽：原画一场 4 小时直播约 6–15 GB，请按硬盘容量谨慎开启多房间视频；
+            视频录制只占用下行带宽，不影响弹幕。<br>
+            ⚠ 开关生效：全局开关的变更仅对<b>之后启动</b>的录制任务生效（运行中的任务请手动停止再开始）；
+            房间级「🎥视频」勾选可在运行中动态切换，下一场开播生效。<br>
+            ⚠ 录制内容仅供个人备份学习，请勿公开传播或用于商业用途，遵守 B 站相关协议与法律法规。
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">🤖 AI 高能解读 <span class="muted">可选项 · OpenAI 兼容接口</span></div>
+          <div class="switch-row"><div><div class="sw-title">场次结束后自动解读</div>
+            <div class="hint">关闭时只在「视频录制 → 高能片段」弹窗手动触发；开启后正常下播会自动按下述模式分析一次（改设置后新场次生效）</div></div>
+            <input type="checkbox" id="swLlmAuto"></div>
+          <div class="form-row">
+            <label>快捷模板（点按自动填充）</label>
+            <div class="llm-presets" id="llmPresets">
+              <button type="button" class="btn btn-sm"
+                      data-base="https://api.deepseek.com/v1"
+                      data-model="deepseek-chat">DeepSeek</button>
+              <button type="button" class="btn btn-sm"
+                      data-base="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                      data-model="qwen-plus">通义千问</button>
+              <button type="button" class="btn btn-sm"
+                      data-base="https://api.moonshot.cn/v1"
+                      data-model="moonshot-v1-8k">Kimi</button>
+              <button type="button" class="btn btn-sm"
+                      data-base="http://localhost:11434/v1"
+                      data-model="qwen2.5:14b">本地 Ollama</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>API Base URL</label>
+            <input class="input" id="setLlmBase" type="text"
+                   placeholder="https://api.deepseek.com/v1">
+          </div>
+          <div class="form-row">
+            <label>API Key <span class="tag" id="llmKeyTag">未配置</span></label>
+            <div class="input-with-action">
+              <input class="input" id="setLlmKey" type="password"
+                     autocomplete="off"
+                     placeholder="已保存则留空；重新填写即替换（Key 不会回显）">
+              <button class="btn btn-sm" id="toggleLlmKey" type="button">显示</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>模型名</label>
+            <input class="input" id="setLlmModel" type="text"
+                   placeholder="deepseek-chat / qwen-plus / qwen2.5:14b">
+          </div>
+          <div class="form-row">
+            <label>默认分析模式（单场弹窗里可临时切换）</label>
+            <div class="llm-modes">
+              <label class="llm-mode-card">
+                <input type="radio" name="llmMode" value="A" checked>
+                <span><b>A 轻量解读</b>
+                  <span class="hint">规则检测出的 Top 8 高能窗口交给模型：切片标题、封面大字、
+                    高能理由、内容分类、建议前后扩切点。约 2–6K tokens，
+                    <b>约 ¥0.01–0.05/场</b>，一般 30 秒内完成。</span></span>
+              </label>
+              <label class="llm-mode-card">
+                <input type="radio" name="llmMode" value="C">
+                <span><b>C 深度策划</b>
+                  <span class="hint">在 A 基础上，先把全场切成 5 分钟统计段让模型粗筛
+                    「弹幕不密但有梗 / 金句 / 神转折」的补漏窗口，并为每个切片写口播开场白。
+                    约 15–25K tokens，<b>约 ¥0.1–0.4/场</b>，约 1–2 分钟。</span></span>
+              </label>
+            </div>
+          </div>
+          <div class="form-row">
+            <button class="btn" id="btnTestLlm" type="button">测试连接</button>
+            <span class="hint inline" id="llmTestResult"></span>
+          </div>
+          <div class="warn-box">
+            ⚠ <b>数据外发、费用自负：</b>分析时会把该场的<b>弹幕文本片段、SC、时间统计</b>
+            发送到你填写的接口（本地 Ollama 不出本机）；<b>不会发送视频文件、UID 或 Cookie</b>。
+            API Key 仅保存在本机服务端 <code>config/settings.json</code>，绝不下发浏览器。<br>
+            ⚠ 结果缓存在视频目录旁挂的 <code>live_xxx.ai.json</code>，重复打开不重复扣费，
+            点「重新分析」才会再次调用；模型可能出错，文案请自行把关。
+          </div>
         </div>
 
         <div class="panel">
@@ -502,7 +654,46 @@
   </div>
 </div>
 
+<!-- 高能时间轴弹窗 -->
+<div class="modal-mask" id="hlMask" hidden>
+  <div class="modal" style="width:min(960px,96vw)">
+    <div class="modal-head">
+      <span id="hlTitle">高能时间轴</span>
+      <button class="btn btn-sm" id="hlClose" type="button">关闭</button>
+    </div>
+    <div class="modal-body nonmono" id="hlBody" style="max-height:70vh;overflow:auto">
+      <div class="muted">正在分析场次数据…</div>
+    </div>
+    <div class="modal-foot" style="flex-wrap:wrap;gap:8px">
+      <label class="dedup-win">窗口
+        <select class="input" id="hlWindow" style="width:80px">
+          <option value="30">30s</option>
+          <option value="60" selected>60s</option>
+          <option value="90">90s</option>
+          <option value="120">120s</option>
+        </select>
+      </label>
+      <label class="dedup-win">Top
+        <select class="input" id="hlTopN" style="width:70px">
+          <option value="5">5</option>
+          <option value="8" selected>8</option>
+          <option value="12">12</option>
+        </select>
+      </label>
+      <button class="btn btn-sm" id="hlReanalyze" type="button">重新分析</button>
+      <span class="toolbar-divider"></span>
+      <label class="dedup-win">AI
+        <select class="input" id="hlAiMode" style="width:104px">
+          <option value="A">A 轻量解读</option>
+          <option value="C">C 深度策划</option>
+        </select>
+      </label>
+      <button class="btn btn-sm btn-primary" id="hlAiRun" type="button">🤖 AI 解读本场</button>
+      <span class="toolbar-spacer"></span>
+      <button class="btn btn-sm" id="hlRegenAss" type="button">重新生成 ASS 字幕</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-wrap" id="toastWrap"></div>
 <script src="/app.js"></script>
-</body>
-</html>

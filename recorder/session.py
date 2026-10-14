@@ -135,6 +135,78 @@ class LiveRoomSession:
             self.refresh_credentials()
             return _do()
 
+    def get_play_info(self, qn: int = 10000) -> dict:
+        """getRoomPlayInfo v2 → 选流后的全部 CDN 拉流地址。
+
+        2026-10 实测（匿名 code=0）：
+        - 流数据在 data.playurl_info.playurl.stream[]（旧版 data.playurl 已废弃为空）
+        - 层级 stream(protocol_name) → format[](format_name)
+          → codec[](codec_name/current_qn/base_url/url_info[])
+        - 完整 URL = url_info.host + codec.base_url + url_info.extra
+        - 游客被限 qn=250 超清（accept=[10000,250]），有效 SESSDATA 才给原画
+        选流优先级：http_stream/flv/avc > http_stream/flv/hevc > 其它（HLS/fmp4 兜底）。
+        返回 {protocol,format,codec,current_qn,accept_qn,qn_desc,urls[]}。
+        """
+        params = {
+            "room_id": self.room_id,
+            "protocol": "0,1",
+            "format": "0,1,2",
+            "codec": "0,1",
+            "qn": qn,
+            "platform": "web",
+            "ptype": "8",
+        }
+        body = self.client.get(
+            "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo",
+            params=params).json()
+        if body.get("code") != 0:
+            raise RuntimeError(
+                f"getRoomPlayInfo 失败: code={body.get('code')} "
+                f"msg={str(body.get('message', ''))[:60]}")
+        playurl = (((body.get("data") or {}).get("playurl_info") or {})
+                   .get("playurl") or {})
+        streams = playurl.get("stream") or []
+        if not streams:
+            raise RuntimeError("getRoomPlayInfo 未返回可用流（可能未开播）")
+
+        def _rank(proto: str, fmt: str, codec: str) -> tuple:
+            p = {"http_stream": 0, "http_hls": 1}.get(proto, 2)
+            f = {"flv": 0, "ts": 1, "fmp4": 2}.get(fmt, 3)
+            c = {"avc": 0, "hevc": 1}.get(codec, 2)
+            return (p, f, c)
+
+        best = None
+        for st in streams:
+            proto = st.get("protocol_name", "")
+            for fm in st.get("format", []):
+                fmt = fm.get("format_name", "")
+                for ck in fm.get("codec", []):
+                    codec = ck.get("codec_name", "")
+                    rank = _rank(proto, fmt, codec)
+                    if best is None or rank < best[0]:
+                        best = (rank, proto, fmt, codec, ck)
+        if best is None:
+            raise RuntimeError("流列表为空")
+        _, proto, fmt, codec, ck = best
+        urls = []
+        for ui in ck.get("url_info", []):
+            host = ui.get("host", "")
+            extra = ui.get("extra", "")
+            base = ck.get("base_url", "")
+            if host and base:
+                urls.append(host + base + extra)
+        if not urls:
+            raise RuntimeError("流缺少 url_info（无 CDN 地址）")
+        return {
+            "protocol": proto,
+            "format": fmt,
+            "codec": codec,
+            "current_qn": int(ck.get("current_qn") or qn),
+            "accept_qn": [int(x) for x in ck.get("accept_qn") or []],
+            "qn_desc": playurl.get("g_qn_desc") or [],
+            "urls": urls,
+        }
+
     def close(self) -> None:
         self.client.close()
 

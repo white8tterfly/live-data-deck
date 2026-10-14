@@ -898,6 +898,209 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   margin-top: 8px;
 }
 
+/* ============ 视频录制 / 高能时间轴 ============ */
+.video-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 12px; flex-wrap: wrap;
+}
+.ffmpeg-pill .tag { font-size: 12px; }
+
+.warn-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(247, 185, 85, .38);
+  background: rgba(247, 185, 85, .1);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.warn-box b { color: var(--warn); }
+
+.hl-summary {
+  display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
+}
+
+.hl-timeline {
+  margin: 8px 0 4px;
+  padding: 10px 12px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.hl-bars {
+  display: flex; align-items: flex-end;
+  height: 130px; gap: 1px;
+  border-bottom: 1px solid var(--border-hi);
+}
+.hl-bar {
+  flex: 1 1 0; min-width: 2px;
+  background: var(--primary);
+  opacity: .45;
+  border-radius: 2px 2px 0 0;
+  cursor: default;
+  transition: opacity .15s;
+}
+.hl-bar.has-sc { background: var(--sc); opacity: .8; }
+.hl-bar.hot {
+  opacity: 1;
+  outline: 2px solid var(--live);
+  outline-offset: -1px;
+  background: var(--primary-hi);
+}
+.hl-axis {
+  display: flex; justify-content: space-between;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11px; color: var(--text-3);
+}
+
+.hl-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.hl-head {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; font-size: 12.5px;
+}
+.hl-rank {
+  font-weight: 700; color: var(--primary-hi);
+  font-family: var(--mono); font-size: 14px;
+}
+.hl-clock { font-family: var(--mono); color: var(--text); }
+.hl-score {
+  font-weight: 700; color: var(--sc);
+  font-family: var(--mono);
+}
+.hl-tag {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--primary-lo);
+  color: var(--primary-hi);
+}
+.hl-phrases {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 8px 0 2px;
+}
+.hl-phrase {
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: 10px;
+  background: var(--panel-hi);
+  color: var(--text-2);
+}
+.hl-phrase b { color: var(--ok); margin-left: 2px; }
+.hl-samples { margin-top: 6px; font-size: 12.5px; }
+.hl-samples summary {
+  cursor: pointer; color: var(--text-3); user-select: none;
+}
+.hl-samples .ps-line { padding: 2px 0; color: var(--text-2); }
+.hl-samples .ps-time {
+  color: var(--text-3); font-family: var(--mono); margin-right: 8px;
+}
+.hl-actions {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin-top: 8px;
+}
+.hl-cut-result { font-size: 12.5px; color: var(--ok); }
+.hl-cut-result a { color: var(--info); }
+.hl-cmdbox { margin-top: 8px; font-size: 12.5px; }
+.hl-cmdbox summary { cursor: pointer; color: var(--text-3); }
+.hl-cmdbox label {
+  display: block; margin: 6px 0 2px;
+  color: var(--text-2);
+}
+.hl-cmdbox .input {
+  width: 100%; font-size: 11.5px;
+  background: var(--terminal-bg);
+}
+.hl-files {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--divider);
+}
+
+/* ============ AI 高能解读 ============ */
+.toolbar-divider {
+  width: 1px; align-self: stretch;
+  background: var(--divider); margin: 2px 4px;
+}
+.llm-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.llm-modes { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.llm-mode-card {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.llm-mode-card:hover { border-color: var(--primary); }
+.llm-mode-card input { margin-top: 3px; accent-color: var(--primary); }
+.llm-mode-card b { display: block; margin-bottom: 2px; }
+.llm-mode-card .hint { font-weight: normal; }
+
+.ai-badge {
+  background: rgba(91, 157, 255, .15) !important;
+  color: var(--info) !important;
+}
+.ai-box {
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: rgba(91, 157, 255, .07);
+  border: 1px solid rgba(91, 157, 255, .35);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-sm);
+}
+.ai-box-head {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; font-size: 13px;
+}
+.ai-box-head .muted { font-size: 12px; }
+.ai-box-head .btn { margin-left: auto; }
+.ai-summary { margin-top: 6px; font-size: 13.5px; line-height: 1.6; }
+.ai-rank {
+  margin: 8px 0 0; padding-left: 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px;
+  font-size: 12.5px;
+}
+.ai-rank li { display: flex; flex-direction: column; }
+.ai-rank .muted { font-size: 11.5px; }
+
+.ai-pick {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  background: var(--panel-hi);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--info);
+}
+.ai-pick-title { font-size: 14px; font-weight: 700; color: var(--info); }
+.ai-pick-tags {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin: 5px 0 3px; font-size: 12px;
+}
+.ai-cover b { color: var(--sc); }
+.ai-reason { font-size: 12.5px; line-height: 1.6; color: var(--text-2); }
+.ai-intro {
+  margin-top: 4px; font-size: 12.5px; color: var(--text-2);
+  padding-top: 4px; border-top: 1px dashed var(--divider);
+}
+.hl-tag.ai {
+  background: rgba(91, 157, 255, .16);
+  color: var(--info);
+}
+.hl-rank.ai {
+  color: var(--info); font-family: inherit; font-size: 12px;
+  padding: 1px 8px; border-radius: 10px;
+  background: rgba(91, 157, 255, .16);
+}
+.hl-card.ai-extra { border-left-color: var(--info); }
+
 /* ============ 响应式 ============ */
 @media (max-width: 1100px) {
   .chart-grid { grid-template-columns: 1fr; }
@@ -914,4 +1117,6 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   .brand { justify-content: center; padding: 0 0 16px; }
   .nav-item.active::before { left: -8px; }
   .settings-grid { grid-template-columns: 1fr; }
+  .hl-bars { height: 90px; }
+  .hl-bar { min-width: 1px; }
 }

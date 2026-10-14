@@ -35,6 +35,17 @@ class RoomRuntime:
     popularity_now: int = 0
     popularity_peak: int = 0
 
+    # 视频录制（附加功能；record_video 为该房间的独立开关，可在运行中动态切换）
+    record_video: bool = False
+    video_active: bool = False        # 视频流是否正在落盘
+    video_session: str = ""           # 场次文件名前缀 live_YYYYMMDD_HHMM
+    video_file: str = ""              # 当前分段文件名
+    video_bytes: int = 0              # 本场累计字节
+    video_segments: int = 0           # 已写分段数（含当前）
+    video_started_at: float = 0       # 本场起录 unix 时间
+    video_qn: int = 0                 # 实际下发画质（qn）
+    video_error: str = ""
+
     counters: dict = field(default_factory=lambda: {
         "danmaku": 0, "super_chat": 0, "gift": 0,
         "emoticon_skipped": 0, "moderation": 0,
@@ -73,6 +84,20 @@ class RoomRuntime:
     def conn_sec(self) -> int:
         return int(time.time() - self.connected_at) if self.connected_at else 0
 
+    def video_reset(self) -> None:
+        """一场视频录制结束后清空运行态（meta/ass 已落盘）。"""
+        self.video_active = False
+        self.video_session = ""
+        self.video_file = ""
+        self.video_bytes = 0
+        self.video_segments = 0
+        self.video_started_at = 0
+        self.video_qn = 0
+        self.video_error = ""
+
+    def video_sec(self) -> int:
+        return int(time.time() - self.video_started_at) if self.video_started_at else 0
+
     def phase(self) -> str:
         """供前端展示的聚合相位。"""
         if not self.running:
@@ -110,5 +135,15 @@ class RoomRuntime:
             "rate_per_min": self.rate_per_min,
             "popularity_now": self.popularity_now,
             "popularity_peak": self.popularity_peak,
+            "record_video": self.record_video,
+            "video_active": self.video_active,
+            "video_session": self.video_session,
+            "video_file": self.video_file,
+            "video_bytes": self.video_bytes,
+            "video_segments": self.video_segments,
+            "video_started_at": self.video_started_at,
+            "video_sec": self.video_sec(),
+            "video_qn": self.video_qn,
+            "video_error": self.video_error,
             "counters": dict(self.counters),
         }

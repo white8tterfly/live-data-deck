@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import random
 import struct
@@ -29,6 +30,7 @@ from .config import Settings
 from .events import EventBus
 from .models import RoomRuntime
 from .session import LiveRoomSession
+from .video_recorder import video_supervise
 
 # ---- 房管处置弱标签：滚动缓冲参数 ----
 RECENT_MAX_N = 5000
@@ -56,6 +58,7 @@ async def record_room(rt: RoomRuntime, settings: Settings,
     rt.running = True
     rt.started_at = time.time()
     session: LiveRoomSession | None = None
+    video_task: asyncio.Task | None = None
     try:
         try:
             session = LiveRoomSession(rt.room_id, sessdata)
@@ -73,6 +76,27 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                 f"status={rt.live_status} title={session.title[:30]!r}"
                 + ("" if sessdata else "（游客模式，稳定性可能较差）"),
                 rt.room_id)
+
+        # 视频直录：与弹幕 WS 并联的独立协程（全局开关为任务快照，房间开关可动态切换）
+        if settings.video_enabled:
+            video_task = asyncio.create_task(
+                video_supervise(rt, session, settings, bus),
+                name=f"video-{rt.room_id}")
+
+            def _video_done(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
+                if t.exception():
+                    bus.log("error",
+                            f"[{rt.vup}] 视频录制协程异常退出: "
+                            f"{type(t.exception()).__name__}: {t.exception()}",
+                            rt.room_id)
+
+            video_task.add_done_callback(_video_done)
+        elif rt.record_video:
+            bus.log("info",
+                    f"[{rt.vup}] 该房间已勾选视频录制，但全局视频开关未启用，"
+                    f"暂不录视频（可在设置页开启后重启任务）", rt.room_id)
 
         state: dict = {
             "recent": deque(maxlen=RECENT_MAX_N),  # (uid明文, rec)
@@ -308,6 +332,11 @@ async def record_room(rt: RoomRuntime, settings: Settings,
         bus.log("info", f"[{rt.vup}] 录制任务已停止", rt.room_id)
         raise
     finally:
+        # 先停视频协程（它仍在使用 session 的 httpx client），再关 session
+        if video_task and not video_task.done():
+            video_task.cancel()
+            with contextlib.suppress(Exception):
+                await video_task
         rt.running = False
         rt.connected = False
         rt.current_file = ""

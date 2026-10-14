@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -31,9 +32,22 @@ TARGETS_FILE = CONFIG_DIR / "targets.json"
 ENV_FILE = ROOT_DIR / ".env"
 
 _BOOL_FIELDS = ("record_gifts", "filter_pure_emoticon", "record_moderation",
-                "anonymize", "sanitize_text", "auto_start")
-_INT_FIELDS = ("offline_poll_sec", "idle_stop_minutes")
-_STR_FIELDS = ("anon_salt", "data_dir", "records_subdir", "weak_subdir")
+                "anonymize", "sanitize_text", "auto_start", "video_enabled",
+                "llm_auto_analyze")
+_INT_FIELDS = ("offline_poll_sec", "idle_stop_minutes",
+               "video_qn", "video_min_free_gb")
+_STR_FIELDS = ("anon_salt", "data_dir", "records_subdir", "weak_subdir",
+               "video_subdir")
+# AI 配置字符串字段单独成组：不参与目录名校验，仅做存取
+_LLM_STR_FIELDS = ("llm_base_url", "llm_api_key", "llm_model", "llm_mode")
+
+# 可选画质档位（qn: B 站直播流清晰度编号）
+VIDEO_QN_CHOICES = (10000, 400, 250, 150, 80)
+VIDEO_QN_LABELS = {10000: "原画", 400: "蓝光", 250: "超清", 150: "高清", 80: "流畅"}
+
+# AI 高能解读模式：A=轻量解读规则 Top N；C=5 分钟段粗筛补漏+切片文案
+LLM_MODES = ("A", "C")
+LLM_MODE_LABELS = {"A": "A 轻量解读", "C": "C 深度策划"}
 
 
 def validate_cared_key(key: str) -> str:
@@ -72,12 +86,23 @@ class Settings:
     # 子目录名可配置：兼容旧版录制器的 raw/weak_label 目录布局
     records_subdir: str = "records"
     weak_subdir: str = "weak_label"
+    video_subdir: str = "video"
     # 录制开关
     record_gifts: bool = False           # 礼物事件（默认不录，信息密度低）
     filter_pure_emoticon: bool = True    # 纯大表情弹幕不录（文字+表情保留）
     record_moderation: bool = True       # 房管拉黑/禁言弱标签回捞
     anonymize: bool = True               # uid 哈希 + 用户名掩码
     sanitize_text: bool = True           # 链接/@/QQ/UID/手机号脱敏
+    # 视频录制（附加功能，默认关闭；还需房间自身 record_video 开关同时打开）
+    video_enabled: bool = False
+    video_qn: int = 10000                # 期望画质；游客/无权限时 B 站自动降档
+    video_min_free_gb: int = 5           # 磁盘剩余低于该值自动停录并告警
+    # AI 高能解读（OpenAI 兼容接口；Key 仅存服务端不下发浏览器）
+    llm_base_url: str = ""               # 如 https://api.deepseek.com/v1
+    llm_api_key: str = ""
+    llm_model: str = ""                  # 如 deepseek-chat / qwen-plus / qwen2.5:14b
+    llm_mode: str = "A"                  # 默认分析模式 A/C
+    llm_auto_analyze: bool = False       # 场次结束后自动解读（默认手动按钮触发）
     # 调度
     offline_poll_sec: int = 45           # 未开播轮询间隔
     idle_stop_minutes: int = 0           # 全部关播 N 分钟后自动停止（0=不启用）
@@ -97,6 +122,10 @@ class Settings:
     def weak_dir(self) -> Path:
         return self.data_path() / (self.weak_subdir.strip() or "weak_label")
 
+    @property
+    def video_dir(self) -> Path:
+        return self.data_path() / (self.video_subdir.strip() or "video")
+
     def effective_sessdata(self) -> str:
         """环境变量 SESSDATA 优先（兼容 .env / 系统环境变量用法）。"""
         return os.environ.get("SESSDATA", "").strip() or self.sessdata.strip()
@@ -105,11 +134,20 @@ class Settings:
         return (os.environ.get("DANMAKU_ANON_SALT", "").strip()
                 or self.anon_salt.strip() or "meowmod-default-salt")
 
+    def llm_ready(self) -> bool:
+        """AI 解读三项配置是否齐全（Key 允许本地 Ollama 随意填，但字段需非空）。"""
+        return bool(self.llm_base_url.strip()
+                    and self.llm_api_key.strip()
+                    and self.llm_model.strip())
+
     def public_dict(self) -> dict:
-        """给前端的视图：不回传 SESSDATA 明文。"""
+        """给前端的视图：不回传 SESSDATA / LLM Key 明文。"""
         d = asdict(self)
         d["sessdata_set"] = bool(self.effective_sessdata())
         d.pop("sessdata", None)
+        d["llm_key_set"] = bool(self.llm_api_key.strip())
+        d.pop("llm_api_key", None)
+        d["llm_ready"] = self.llm_ready()
         d["data_dir_effective"] = str(self.data_path())
         return d
 
@@ -119,6 +157,7 @@ class Target:
     room_id: int
     vup: str
     enabled: bool = True
+    record_video: bool = False        # 该房间是否同时录制直播视频（默认关）
     added_at: float = field(default_factory=lambda: time.time())
 
 
@@ -132,7 +171,8 @@ class SettingsStore:
         if SETTINGS_FILE.exists():
             try:
                 raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-                for k in (*_BOOL_FIELDS, *_INT_FIELDS, *_STR_FIELDS, "sessdata"):
+                for k in (*_BOOL_FIELDS, *_INT_FIELDS, *_STR_FIELDS,
+                          *_LLM_STR_FIELDS, "sessdata"):
                     if k in raw:
                         kwargs[k] = raw[k]
             except (json.JSONDecodeError, OSError):
@@ -175,10 +215,12 @@ class SettingsStore:
             if k in patch:
                 setattr(s, k, bool(patch[k]))
         # 子目录名做基础净化：只允许单层目录名，防止注入路径分隔
-        for k in ("records_subdir", "weak_subdir"):
+        _sub_defaults = {"records_subdir": "records", "weak_subdir": "weak_label",
+                         "video_subdir": "video"}
+        for k in _sub_defaults:
             if patch.get(k) is not None:
                 v = str(patch[k]).strip().replace("/", "").replace("\\", "")
-                setattr(s, k, v or ("records" if k == "records_subdir" else "weak_label"))
+                setattr(s, k, v or _sub_defaults[k])
         for k in _INT_FIELDS:
             if patch.get(k) is not None:
                 try:
@@ -191,7 +233,7 @@ class SettingsStore:
         for k in ("anon_salt", "data_dir"):
             if patch.get(k) is not None:
                 setattr(s, k, str(patch[k]).strip())
-        for k in ("records_subdir", "weak_subdir"):
+        for k in ("records_subdir", "weak_subdir", "video_subdir"):
             if patch.get(k) is not None:
                 v = str(patch[k]).strip().replace("\\", "/").strip("/")
                 # 只允许单层目录名，防止路径穿越到数据根目录之外
@@ -203,6 +245,23 @@ class SettingsStore:
             # 空串视为「不修改」（表单留空保存）；清空凭证请直接删 settings.json
             if val:
                 s.sessdata = val
+        # ---- AI 解读配置 ----
+        if patch.get("llm_base_url") is not None:
+            s.llm_base_url = str(patch["llm_base_url"]).strip().rstrip("/")
+        if patch.get("llm_model") is not None:
+            s.llm_model = str(patch["llm_model"]).strip()
+        if patch.get("llm_api_key") is not None:
+            # 空串/纯空格=保持原 Key（与 SESSDATA 相同的交互约定）
+            val = str(patch["llm_api_key"]).strip()
+            if val:
+                s.llm_api_key = val
+        if patch.get("llm_mode") is not None:
+            m = str(patch["llm_mode"]).strip().upper()
+            if m not in LLM_MODES:
+                raise ValueError(f"AI 分析模式无效，可选：{LLM_MODES}")
+            s.llm_mode = m
+        if s.llm_base_url and not re.match(r"^https?://", s.llm_base_url):
+            raise ValueError("AI 接口地址必须以 http:// 或 https:// 开头")
         # 输出目录合法性
         p = s.data_path()
         try:
@@ -214,6 +273,9 @@ class SettingsStore:
             raise ValueError(f"数据目录不可写：{p}（{e}）")
         if s.offline_poll_sec < 10:
             s.offline_poll_sec = 10
+        if s.video_qn not in VIDEO_QN_CHOICES:
+            raise ValueError(f"画质档位无效，可选：{VIDEO_QN_CHOICES}")
+        s.video_min_free_gb = min(max(s.video_min_free_gb, 1), 1000)
         self.save()
         return s
 
@@ -271,6 +333,7 @@ class TargetStore:
                     room_id=int(item["room_id"]),
                     vup=str(item.get("vup") or f"room_{item['room_id']}").strip(),
                     enabled=bool(item.get("enabled", True)),
+                    record_video=bool(item.get("record_video", False)),
                     added_at=float(item.get("added_at") or time.time()),
                 ))
             except (KeyError, TypeError, ValueError):
@@ -287,16 +350,20 @@ class TargetStore:
     def get(self, room_id: int) -> Target | None:
         return next((t for t in self.targets if t.room_id == room_id), None)
 
-    def add(self, room_id: int, vup: str, enabled: bool = True) -> Target:
+    def add(self, room_id: int, vup: str, enabled: bool = True,
+            record_video: bool = False) -> Target:
         if self.get(room_id):
             raise ValueError(f"房间 {room_id} 已存在")
-        t = Target(room_id=room_id, vup=vup or f"room_{room_id}", enabled=enabled)
+        t = Target(room_id=room_id, vup=vup or f"room_{room_id}",
+                   enabled=enabled, record_video=record_video)
         self.targets.append(t)
         self.save()
         return t
 
     def bulk_add(self, pairs: list[tuple[int, str]],
-                 enabled: bool = True) -> tuple[list[Target], list[int]]:
+                 enabled: bool = True,
+                 record_video: bool = False
+                 ) -> tuple[list[Target], list[int]]:
         """批量加入房间（单次落盘）。返回 (新增目标, 已存在被跳过的 room_id)。"""
         new: list[Target] = []
         skipped: list[int] = []
@@ -306,7 +373,7 @@ class TargetStore:
                 continue
             t = Target(room_id=room_id,
                        vup=(vup or "").strip() or f"room_{room_id}",
-                       enabled=enabled)
+                       enabled=enabled, record_video=record_video)
             self.targets.append(t)
             new.append(t)
         if new:
@@ -314,7 +381,8 @@ class TargetStore:
         return new, skipped
 
     def update(self, room_id: int, vup: str | None = None,
-               enabled: bool | None = None) -> Target:
+               enabled: bool | None = None,
+               record_video: bool | None = None) -> Target:
         t = self.get(room_id)
         if not t:
             raise KeyError(f"房间 {room_id} 不存在")
@@ -322,6 +390,8 @@ class TargetStore:
             t.vup = vup.strip() or f"room_{room_id}"
         if enabled is not None:
             t.enabled = bool(enabled)
+        if record_video is not None:
+            t.record_video = bool(record_video)
         self.save()
         return t
 
