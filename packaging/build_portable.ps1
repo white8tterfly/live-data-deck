@@ -29,6 +29,9 @@ $built = Join-Path $distDir $appName
 Copy-Item -Recurse (Join-Path $built "_internal") (Join-Path $stage "_internal")
 Copy-Item (Join-Path $built "$appName.exe") (Join-Path $stage "$appName.exe")
 Copy-Item (Join-Path $root "packaging\使用说明.txt") (Join-Path $stage "使用说明.txt")
+# MIT 许可证与第三方组件/商标声明必须随二进制分发物一同提供
+Copy-Item (Join-Path $root "LICENSE") (Join-Path $stage "LICENSE")
+Copy-Item (Join-Path $root "NOTICE") (Join-Path $stage "NOTICE")
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "config"), (Join-Path $stage "data") | Out-Null
 Set-Content -Path (Join-Path $stage "config\（配置首次运行自动生成，请勿外传此文件夹）.txt") `
     -Value "settings.json 与 targets.json 在程序首次保存设置时自动生成，包含你的 SESSDATA，请勿外传。" -Encoding UTF8
@@ -56,7 +59,7 @@ try {
     $names = $z.Entries.FullName
     $leak = $names | Where-Object { $_ -match '\.py$' -or $_ -match 'settings\.json' -or $_ -match '\\' -or $_ -match '\.env$' }
     if ($leak) { throw "zip 自检失败，存在源码/配置/反斜杠条目：$($leak -join ', ')" }
-    foreach ($m in @("$pkgName/$appName.exe", "$pkgName/使用说明.txt", "$pkgName/_internal/web/index.html")) {
+    foreach ($m in @("$pkgName/$appName.exe", "$pkgName/使用说明.txt", "$pkgName/LICENSE", "$pkgName/NOTICE", "$pkgName/_internal/web/index.html")) {
         if ($names -notcontains $m) { throw "zip 自检失败，缺少 $m" }
     }
     Write-Host ("  自检通过：{0} 个条目，{1:N1} MB" -f $names.Count, ((Get-Item $zip).Length / 1MB)) -ForegroundColor Green

@@ -1,0 +1,73 @@
+Live Data Deck（直播数据舱）
+Copyright (c) 2026 Live Data Deck contributors
+
+本项目基于 MIT 许可证发布，完整许可证文本见 LICENSE。
+This product includes software licensed under the MIT License (see LICENSE).
+
+────────────────────────────────────────────────────────────
+一、商标声明 / Trademarks
+────────────────────────────────────────────────────────────
+“哔哩哔哩 / B 站 / bilibili”及相关标识均为哔哩哔哩股份有限公司及其关联方
+（以下统称“B 站”）的商标或注册商标。
+
+本项目是独立开发的非官方工具，与 B 站不存在任何隶属、合作、授权或背书关系。
+项目名称与界面中不包含上述商标；文档与代码里出现的相关名称仅用于指示性描述
+本软件所适配的平台，不主张任何相关权利。
+
+This project is an unofficial, independent work. It is not affiliated with,
+endorsed or sponsored by Bilibili Inc. All third-party trademarks are the
+property of their respective owners and are used for referential purposes only.
+
+────────────────────────────────────────────────────────────
+二、运行时第三方依赖 / Runtime Dependencies
+────────────────────────────────────────────────────────────
+本项目不复制任何第三方源码，以下依赖通过 pip 安装，均为宽松型许可证：
+
+  httpx                 BSD-3-Clause
+  httpcore              BSD-3-Clause
+  websockets            BSD-3-Clause
+  FastAPI               MIT
+  Starlette             BSD-3-Clause
+  Uvicorn               BSD-3-Clause
+  python-dotenv         BSD-3-Clause
+  Pillow                MIT-CMU (HPND)
+  anyio                 MIT
+  sniffio               MIT OR Apache-2.0
+  h11                   MIT
+  idna                  BSD-3-Clause
+  click                 BSD-3-Clause
+  typing_extensions     PSF-2.0
+  pydantic              MIT
+  annotated-types       MIT
+  watchfiles            MIT
+  httptools             MIT
+  PyYAML                MIT
+  certifi               MPL-2.0（仅为 Mozilla CA 根证书数据包，未修改）
+
+各依赖的完整许可证文本随其安装包分发，可在 Python 环境的
+site_metadata/<package>-.dist-info/LICENSE* 中查阅。
+
+────────────────────────────────────────────────────────────
+三、构建与打包 / Build & Packaging
+────────────────────────────────────────────────────────────
+1. PyInstaller（GPL-2.0-or-later，附带特殊例外条款）仅作为构建期工具使用；
+   其例外条款明确允许以任意许可证分发由其冻结生成的应用程序，本项目源码
+   不链接、不包含 PyInstaller 运行时代码。
+
+2. Windows 绿色版会随包重新分发以下组件，其权利归各自权利人所有，
+   按各自许可证条款使用：
+     - CPython 运行时        PSF License
+     - OpenSSL               Apache-2.0
+     - pywin32               PSF License
+     - VC++ / 通用 C 运行库   Microsoft 软件许可条款（允许再分发）
+
+3. ffmpeg 不随本软件内置、不随包分发；秒切/转封装功能仅在运行时检测系统
+   PATH 中用户自行安装的 ffmpeg，未安装时该功能自动降级。
+
+────────────────────────────────────────────────────────────
+四、独立实现声明 / Independent Implementation
+────────────────────────────────────────────────────────────
+本项目中的 wbi 请求签名、浏览器同款请求头与连接保活逻辑，是为实现与
+B 站 Web 端正常互操作，对浏览器公开可观察的网络行为所做的独立实现；
+项目中不包含 B 站的任何专有源码、受版权保护的素材或官方 SDK。
+平台接口与策略可能随时变更，本项目不保证功能持续可用。
