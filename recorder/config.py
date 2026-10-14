@@ -295,6 +295,24 @@ class TargetStore:
         self.save()
         return t
 
+    def bulk_add(self, pairs: list[tuple[int, str]],
+                 enabled: bool = True) -> tuple[list[Target], list[int]]:
+        """批量加入房间（单次落盘）。返回 (新增目标, 已存在被跳过的 room_id)。"""
+        new: list[Target] = []
+        skipped: list[int] = []
+        for room_id, vup in pairs:
+            if self.get(room_id):
+                skipped.append(room_id)
+                continue
+            t = Target(room_id=room_id,
+                       vup=(vup or "").strip() or f"room_{room_id}",
+                       enabled=enabled)
+            self.targets.append(t)
+            new.append(t)
+        if new:
+            self.save()
+        return new, skipped
+
     def update(self, room_id: int, vup: str | None = None,
                enabled: bool | None = None) -> Target:
         t = self.get(room_id)

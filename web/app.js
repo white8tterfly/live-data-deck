@@ -332,6 +332,182 @@ $('#roomTable').addEventListener('change', async (e) => {
   } catch (err) { toast(err.message, 'err'); cb.checked = !cb.checked; }
 });
 
+/* ---------------- B 站关注列表导入 ---------------- */
+const followState = { items: [], loaded: false, loading: false, selected: new Set() };
+
+function followVisible() {
+  const q = $('#followSearch').value.trim().toLowerCase();
+  const liveOnly = $('#followLiveOnly').checked;
+  const hideAdded = $('#followHideAdded').checked;
+  return followState.items.filter((it) => {
+    if (hideAdded && it.added) return false;
+    if (liveOnly && it.live_status !== 1) return false;
+    if (q && !`${it.uname} ${it.room_id} ${it.title}`.toLowerCase().includes(q)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function followBadge(it) {
+  if (it.live_status === 1) return '<span class="badge recording">直播中</span>';
+  if (it.live_status === 2) return '<span class="badge connecting">轮播中</span>';
+  return '<span class="badge stopped">未开播</span>';
+}
+
+function syncFollowFoot(list) {
+  const selectable = list.filter((i) => !i.added);
+  const sel = followState.selected.size;
+  $('#followSelInfo').textContent = sel ? `已选 ${sel} 间，加入后错峰启动录制` : '';
+  $('#followConfirm').disabled = sel === 0;
+  $('#followSelectLive').disabled =
+    !selectable.some((i) => i.live_status === 1);
+}
+
+function renderFollow() {
+  const box = $('#followContent');
+  if (followState.loading) {
+    box.innerHTML = '<div class="muted follow-hint">正在读取关注列表（关注较多时需翻几页）…</div>';
+    $('#followStats').textContent = '';
+    syncFollowFoot([]);
+    return;
+  }
+  if (!followState.loaded) return;  // 错误提示已直接渲染在列表区
+  const liveCount = followState.items.filter((i) => i.live_status === 1).length;
+  $('#followStats').textContent =
+    `共 ${followState.items.length} 位 · 直播中 ${liveCount}`;
+  if (!followState.items.length) {
+    box.innerHTML = '<div class="muted follow-hint">这个账号的关注列表为空</div>';
+    syncFollowFoot([]);
+    return;
+  }
+  const list = followVisible();
+  if (!list.length) {
+    box.innerHTML = '<div class="muted follow-hint">没有符合筛选条件的主播</div>';
+    syncFollowFoot([]);
+    return;
+  }
+  box.innerHTML = list.map((it) => {
+    const face = it.face
+      ? `<img class="follow-face" loading="lazy" src="${fmt.esc(it.face)}" alt=""
+              onerror="this.remove()">`
+      : '<span class="follow-face follow-face-ph">📺</span>';
+    return `<label class="follow-item${it.added ? ' is-added' : ''}">
+      <input type="checkbox" data-follow="${it.room_id}"
+             ${followState.selected.has(it.room_id) ? 'checked' : ''}
+             ${it.added ? 'disabled' : ''}>
+      ${face}
+      <span class="follow-main">
+        <span class="follow-line1">
+          <b>${fmt.esc(it.uname || `房间${it.room_id}`)}</b>
+          ${followBadge(it)}
+          <span class="muted mono" style="margin-left:0">${it.room_id}</span>
+        </span>
+        ${it.title ? `<span class="follow-title" title="${fmt.esc(it.title)}">${fmt.esc(it.title)}</span>` : ''}
+      </span>
+      ${it.added ? '<span class="tag">已添加</span>' : ''}
+    </label>`;
+  }).join('');
+  syncFollowFoot(list);
+}
+
+async function loadFollow() {
+  followState.loading = true;
+  followState.loaded = false;
+  renderFollow();
+  try {
+    const r = await api('/api/followings');
+    followState.items = r.items || [];
+    followState.loaded = true;
+    const ids = new Set(followState.items.map((i) => i.room_id));
+    followState.selected = new Set(
+      [...followState.selected].filter((id) => ids.has(id)));
+  } catch (err) {
+    followState.items = [];
+    followState.loaded = false;
+    $('#followContent').innerHTML =
+      `<div class="follow-err"><div>❌ ${fmt.esc(err.message)}</div>
+       <div class="hint">关注列表属于账号私有数据，需要有效登录态；弹幕录制不受影响。</div>
+       <button class="btn btn-sm btn-primary" data-goto="settings"
+               id="followGoSettings" type="button">去设置 SESSDATA</button></div>`;
+    $('#followStats').textContent = '';
+    syncFollowFoot([]);
+  } finally {
+    followState.loading = false;
+    renderFollow();
+  }
+}
+
+$('#btnImportFollowing').addEventListener('click', () => {
+  $('#followMask').hidden = false;
+  if (!followState.loaded && !followState.loading) loadFollow();
+  else renderFollow();
+});
+$('#followClose').addEventListener('click', () => { $('#followMask').hidden = true; });
+$('#followReload').addEventListener('click', () => { if (!followState.loading) loadFollow(); });
+['followSearch', 'followLiveOnly', 'followHideAdded'].forEach((id) =>
+  $('#' + id).addEventListener('input', renderFollow));
+
+$('#followContent').addEventListener('change', (e) => {
+  const cb = e.target.closest('[data-follow]');
+  if (!cb) return;
+  const id = Number(cb.dataset.follow);
+  if (cb.checked) followState.selected.add(id);
+  else followState.selected.delete(id);
+  syncFollowFoot(followVisible());
+});
+
+$('#followContent').addEventListener('click', (e) => {
+  if (e.target.closest('#followGoSettings')) $('#followMask').hidden = true;
+});
+
+$('#followSelectLive').addEventListener('click', () => {
+  const liveIds = followVisible()
+    .filter((i) => !i.added && i.live_status === 1)
+    .map((i) => i.room_id);
+  const allOn = liveIds.length > 0
+    && liveIds.every((id) => followState.selected.has(id));
+  liveIds.forEach((id) => allOn
+    ? followState.selected.delete(id)
+    : followState.selected.add(id));
+  renderFollow();
+});
+
+$('#followConfirm').addEventListener('click', async () => {
+  const chosen = followState.items
+    .filter((i) => followState.selected.has(i.room_id) && !i.added);
+  if (!chosen.length) return;
+  const btn = $('#followConfirm');
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '加入中…';
+  try {
+    const r = await api('/api/targets/bulk', {
+      method: 'POST',
+      body: {
+        items: chosen.map((i) => ({ room_id: i.room_id, vup: i.uname || '' })),
+        enabled: true,
+      },
+    });
+    const addedIds = new Set(r.added.map((a) => a.room_id));
+    followState.items.forEach((i) => { if (addedIds.has(i.room_id)) i.added = true; });
+    followState.selected = new Set(
+      [...followState.selected].filter((id) => !addedIds.has(id)));
+    renderFollow();
+    renderRoomTable();
+    if (r.added.length) {
+      toast(`已加入 ${r.added.length} 个房间，正在错峰连接录制`
+        + (r.skipped.length ? `，跳过已存在 ${r.skipped.length} 个` : ''), 'ok', 4200);
+    } else {
+      toast('所选房间均已在录制目标中', 'warn');
+    }
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    btn.textContent = oldText;
+  }
+});
+
 /* ---------------- 全局控制 ---------------- */
 $('#btnStartAll').addEventListener('click', async () => {
   try {

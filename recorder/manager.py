@@ -36,6 +36,7 @@ class RecorderManager:
         self.runtimes: dict[int, RoomRuntime] = {}
         self._snapshot_task: asyncio.Task | None = None
         self._idle_task: asyncio.Task | None = None
+        self._bg_stagger: set[asyncio.Task] = set()
         self.started_at = 0.0
 
     # ---------- 生命周期 ----------
@@ -76,6 +77,40 @@ class RecorderManager:
         if autostart and t.enabled:
             await self.start_room(room_id)
         return t
+
+    async def add_targets_bulk(
+        self, pairs: list[tuple[int, str]], enabled: bool = True
+    ) -> tuple[list[Target], list[int], list[int]]:
+        """批量导入房间并错峰启动（关注列表一键导入用）。
+
+        返回 (新增目标, 跳过的 room_id, 实际启动的 room_id)。
+        """
+        new, skipped = self.target_store.bulk_add(pairs, enabled)
+        for t in new:
+            self.runtimes[t.room_id] = self._make_rt(t)
+        if new:
+            self.bus.log("info",
+                         f"批量导入 {len(new)} 个房间"
+                         f"（跳过已存在 {len(skipped)} 个）")
+        # 错峰启动放到后台：一次导入几十上百间时，不能让 HTTP 请求阻塞数分钟
+        todo = [t.room_id for t in new if enabled and t.enabled]
+        if todo:
+            task = asyncio.create_task(self._stagger_start(todo))
+            self._bg_stagger.add(task)
+            task.add_done_callback(self._bg_stagger.discard)
+        self.bus.emit("state", self.snapshot())
+        return new, skipped, []
+
+    async def _stagger_start(self, room_ids: list[int]) -> None:
+        """后台按 START_STAGGER_SEC 间隔逐个启动导入的房间。"""
+        for i, rid in enumerate(room_ids):
+            if i:
+                await asyncio.sleep(START_STAGGER_SEC)
+            try:
+                if not self.is_running(rid):
+                    await self.start_room(rid)
+            except Exception as e:
+                self.bus.log("error", f"房间 {rid} 启动失败：{e}")
 
     async def update_target(self, room_id: int, vup: str | None = None,
                             enabled: bool | None = None) -> Target:

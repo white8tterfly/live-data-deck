@@ -139,7 +139,12 @@
     <!-- 房间管理 -->
     <section class="view" id="view-rooms">
       <div class="panel">
-        <div class="panel-title">添加直播间</div>
+        <div class="panel-title" style="display:flex;align-items:center">
+          添加直播间
+          <button class="btn btn-sm" id="btnImportFollowing" style="margin-left:auto" type="button">
+            从 B 站关注导入
+          </button>
+        </div>
         <div class="add-row">
           <input class="input" id="addRoomId" type="number" min="1" placeholder="直播间号（URL 中的数字）">
           <input class="input" id="addVup" type="text" placeholder="保存目录名 / 主播名（可留空自动命名）">
@@ -247,13 +252,20 @@
               <button class="btn btn-sm" id="toggleSess" type="button">显示</button>
             </div>
             <div class="guide">
+              <div class="guide-head">SESSDATA 有什么用？不填会怎样？</div>
+              <ul class="guide-points">
+                <li><b>不填也能正常录制：</b>弹幕、SC、进场消息、人气等属于直播间的公开广播，游客身份就能接收，和你不登录 B 站也能看直播弹幕一样；</li>
+                <li><b>填写后连接更稳：</b>带登录态时边缘 WS 节点更少被风控秒断，长时间挂机更可靠；</li>
+                <li><b>战报数据更全：</b>金礼物、大航海等需要登录态的营收明细才拿得到，否则战报营收可能偏少；</li>
+                <li><b>解锁关注导入：</b>「房间管理 → 从 B 站关注导入」可读取关注列表、查看哪些主播正在开播并一键加入录制（该接口游客无权访问）。</li>
+              </ul>
               <div class="guide-head">如何获取 SESSDATA（约 30 秒）</div>
               <ol class="guide-steps">
                 <li>用电脑浏览器（Chrome / Edge）登录 <code>live.bilibili.com</code></li>
                 <li>按 <kbd>F12</kbd> 打开开发者工具，切到 <b>Application</b>（应用）→ 左侧 <b>Cookies</b> → <code>https://live.bilibili.com</code></li>
                 <li>在 Cookie 列表找到 <code>SESSDATA</code>，复制它的值，粘贴到上方输入框并保存</li>
               </ol>
-              <div class="guide-lock">凭证仅保存在本机 <code>config/settings.json</code>，不会上传任何服务器</div>
+              <div class="guide-lock">凭证仅保存在本机 <code>config/settings.json</code>，不会上传任何服务器；在 B 站退出登录或改密会使其失效，重新复制一次即可。</div>
             </div>
           </div>
           <div class="form-row">
@@ -458,6 +470,35 @@
       </div>
     </div>
     <pre class="modal-body" id="previewBody"></pre>
+  </div>
+</div>
+
+<!-- 关注列表导入弹窗 -->
+<div class="modal-mask" id="followMask" hidden>
+  <div class="modal" style="width:min(880px,94vw)">
+    <div class="modal-head">
+      <span>从 B 站关注导入 <span class="muted" id="followStats"></span></span>
+      <button class="btn btn-sm" id="followClose" type="button">关闭</button>
+    </div>
+    <div class="modal-body nonmono" style="padding:0">
+      <div class="follow-toolbar">
+        <input class="input" id="followSearch" type="search"
+               placeholder="搜索主播名 / 房间号 / 标题">
+        <label class="switch-line"><input type="checkbox" id="followLiveOnly"> 仅看直播中</label>
+        <label class="switch-line"><input type="checkbox" id="followHideAdded" checked> 隐藏已添加</label>
+        <button class="btn btn-sm" id="followReload" type="button">刷新</button>
+      </div>
+      <div class="follow-list" id="followContent">
+        <div class="muted follow-hint">正在读取关注列表…</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint" style="margin:0" id="followSelInfo"></span>
+      <button class="btn" id="followSelectLive" type="button">选中全部直播中</button>
+      <button class="btn btn-primary" id="followConfirm" style="margin-left:auto" type="button">
+        加入选中并录制
+      </button>
+    </div>
   </div>
 </div>
 

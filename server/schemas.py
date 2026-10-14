@@ -15,6 +15,16 @@ class TargetPatch(BaseModel):
     enabled: bool | None = None
 
 
+class TargetBulkItem(BaseModel):
+    room_id: int = Field(gt=0)
+    vup: str = ""
+
+
+class TargetsBulkIn(BaseModel):
+    items: list[TargetBulkItem] = Field(min_length=1, max_length=300)
+    enabled: bool = True
+
+
 class CookieTestIn(BaseModel):
     sessdata: str | None = None
 

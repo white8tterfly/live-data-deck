@@ -19,8 +19,10 @@ from recorder.session import verify_sessdata
 from recorder.theme import (CARD_META, CARD_COLS_CHOICES, COLOR_META,
                             FONT_SCALES, RANK_META, SECTION_META,
                             ReportTheme, WIDTH_CHOICES, coerce_theme)
+from recorder import following as following_mod
 from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
-                            DedupIn, ReportIn, TargetIn, TargetPatch)
+                            DedupIn, ReportIn, TargetIn, TargetPatch,
+                            TargetsBulkIn)
 
 PREVIEW_BYTES = 256 * 1024   # 大文件只从尾部读 256KB
 PREVIEW_MAX_LINES = 500
@@ -103,6 +105,46 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="房间不存在")
         await mgr().remove_target(room_id)
         return {"ok": True}
+
+    @app.post("/api/targets/bulk", status_code=201)
+    async def add_targets_bulk(body: TargetsBulkIn):
+        """从关注列表批量导入：跳过已存在，新增房间错峰启动。"""
+        pairs = [(i.room_id, i.vup.strip()) for i in body.items]
+        new, skipped, started = await mgr().add_targets_bulk(
+            pairs, body.enabled)
+        return {
+            "added": [{"room_id": t.room_id, "vup": t.vup} for t in new],
+            "skipped": skipped,
+            "started": started,
+        }
+
+    # ---------------- B 站关注列表（需登录态） ----------------
+    @app.get("/api/followings")
+    async def list_followings():
+        sd = mgr().settings.effective_sessdata()
+        if not sd.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="尚未配置 SESSDATA：关注列表属于账号私有数据，"
+                       "游客模式无法读取，请先到「设置」页填写登录凭证")
+        try:
+            items = await asyncio.to_thread(
+                following_mod.fetch_all_followed, sd)
+        except following_mod.FollowingError as e:
+            raise HTTPException(
+                status_code=401 if e.code in (-101, -111) else 502,
+                detail=str(e))
+        existing = {t.room_id: t for t in mgr().target_store.targets}
+        out = []
+        for it in items:
+            t = existing.get(it["room_id"])
+            out.append({**it, "added": t is not None,
+                        "enabled": bool(t.enabled) if t else False})
+        return {
+            "total": len(out),
+            "live_count": sum(1 for x in out if x["live_status"] == 1),
+            "items": out,
+        }
 
     # ---------------- 录制控制 ----------------
     @app.post("/api/rooms/{room_id}/start")
