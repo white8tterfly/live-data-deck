@@ -71,7 +71,7 @@ def create_app() -> FastAPI:
         finally:
             await mgr.shutdown()
 
-    app = FastAPI(title="B站直播弹幕录制器", version="1.4.0", lifespan=lifespan)
+    app = FastAPI(title="B站直播弹幕录制器", version="1.5.0", lifespan=lifespan)
 
     def mgr() -> RecorderManager:
         return app.state.mgr
