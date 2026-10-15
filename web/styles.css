@@ -1671,19 +1671,23 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
 }
 .hl-card.ai-extra { border-left-color: var(--info); }
 
-/* ============ 弹幕样式设置面板 ============ */
-.ds-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
-  gap: 22px;
-  align-items: start;
-}
+/* ============ 弹幕样式设置面板（表单在上、大预览在下，仿战报预览） ============ */
+.ds-layout { min-width: 0; }
 .ds-form { min-width: 0; }
-.ds-preview-col { min-width: 0; position: sticky; top: 12px; }
+.ds-preview-col {
+  min-width: 0;
+  margin-top: 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  scroll-margin-top: 16px;
+}
 .ds-preview {
   position: relative;
-  width: 100%;
-  aspect-ratio: 16 / 9;
+  /* 宽度取满内容区与 72vh 高度约束下的较小值，比例由 JS 按画布设置写入变量 */
+  width: min(100%, calc(72vh * var(--ds-rw, 16) / var(--ds-rh, 9)));
+  aspect-ratio: var(--ds-rw, 16) / var(--ds-rh, 9);
+  margin: 10px auto 0;
   border-radius: var(--radius-sm);
   overflow: hidden;
   border: 1px solid var(--border);
@@ -1691,6 +1695,13 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
     radial-gradient(120% 90% at 20% 0%, #2a2f45 0%, #14171f 55%, #0b0d13 100%);
   box-shadow: inset 0 0 60px rgba(0, 0, 0, .45);
   --ds-op: 1;
+  --ds-rw: 16;
+  --ds-rh: 9;
+}
+.ds-preview-hint {
+  margin: 8px auto 0;
+  max-width: min(100%, calc(72vh * var(--ds-rw, 16) / var(--ds-rh, 9)));
+  text-align: center;
 }
 /* 显示区域以下的遮罩 + 区域分界虚线（高度由 JS 设置） */
 .ds-area-mask {
@@ -1774,8 +1785,6 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   .brand { justify-content: center; padding: 0 0 16px; }
   .nav-item.active::before { left: -8px; }
   .settings-grid { grid-template-columns: 1fr; }
-  .ds-layout { grid-template-columns: 1fr; }
-  .ds-preview-col { position: static; }
   .hl-bars { height: 90px; }
   .hl-bar { min-width: 1px; }
 }

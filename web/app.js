@@ -2025,7 +2025,7 @@ const SETTINGS_TAB_HINT = {
   theme: '战报样式在本页独立保存，与上方的统一保存无关',
 };
 /* 弹幕样式实时预览的运行状态（var 声明避免本 IIFE 执行时的 TDZ 问题） */
-var dsTimer = null, dsLanes = [], dsLanesN = 0;
+var dsTimer = null, dsLanes = [], dsLanesN = 0, dsBoxW = 0, dsBoxH = 0;
 function switchSettingsTab(tab) {
   if (!SETTINGS_TABS.includes(tab)) tab = 'base';
   $$('#settingsTabs .st-tab').forEach((b) =>
@@ -2787,6 +2787,17 @@ $('#btnDsReset').addEventListener('click', async () => {
 });
 
 /* ------- 实时预览：与后端同参数的迷你弹幕模拟 ------- */
+/* 预览画布比例跟随画布设置：自动 16:9，手动取手填宽高比（含竖屏） */
+function dsApplyRatio(st) {
+  let rw = 16, rh = 9;
+  if (st.canvas_mode === 'manual' && st.canvas_w >= 320 && st.canvas_h >= 320) {
+    rw = st.canvas_w; rh = st.canvas_h;
+  }
+  const box = $('#dsPreview');
+  box.style.setProperty('--ds-rw', String(rw));
+  box.style.setProperty('--ds-rh', String(rh));
+}
+
 function dsGeom(st) {
   const rect = $('#dsPreview').getBoundingClientRect();
   if (rect.width < 10 || rect.height < 10) return null;
@@ -2809,7 +2820,12 @@ function dsTick() {
   const st = collectDs();
   const g = dsGeom(st);
   if (!g) return;
-  if (g.n !== dsLanesN) { dsLanesN = g.n; dsLanes = new Array(g.n).fill(null); }
+  /* 预览框尺寸（含手动画布改比例/窗口缩放）变化：旧像素坐标的在途弹幕作废，车道重建 */
+  if (g.n !== dsLanesN || g.W !== dsBoxW || g.H !== dsBoxH) {
+    dsLanesN = g.n; dsBoxW = g.W; dsBoxH = g.H;
+    dsLanes = new Array(g.n).fill(null);
+    $$('#dsPreview .ds-dm').forEach((el) => el.remove());
+  }
   const box = $('#dsPreview');
   const t = performance.now() / 1000;
   const gap = g.S * 0.25;
@@ -2854,6 +2870,7 @@ function applyDsStatic() {
   if (!dsData) return;
   const st = collectDs();
   const box = $('#dsPreview');
+  dsApplyRatio(st);   // 必须先写比例变量，下面 dsGeom 读 rect 才能拿到新尺寸
   const g = dsGeom(st);
   box.style.setProperty('--ds-area-h', `${Number(st.area_ratio) * 100}%`);
   box.style.setProperty('--ds-op', String(st.opacity));
@@ -2914,6 +2931,13 @@ function onDsChange(e) {
 const dsPanel = document.querySelector('.settings-tabpanel[data-panel="ds"]');
 dsPanel.addEventListener('input', onDsChange);
 dsPanel.addEventListener('change', onDsChange);
+/* 窗口缩放：预览尺寸由 vh/宽度公式决定，静止示例字号需同步重算（在途弹幕由 dsTick 重建） */
+var dsResizeQueued = false;
+window.addEventListener('resize', () => {
+  if (!dsTimer || dsResizeQueued) return;
+  dsResizeQueued = true;
+  requestAnimationFrame(() => { dsResizeQueued = false; applyDsStatic(); });
+});
 
 /* ---------------- 数据分析 ---------------- */
 const ana = {

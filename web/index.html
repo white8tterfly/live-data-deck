@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>直播数据舱 · B站直播全数据录制与分析</title>
-<link rel="stylesheet" href="/styles.css?v=43">
+<link rel="stylesheet" href="/styles.css?v=44">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fb7299'/%3E%3Cstop offset='1' stop-color='%23ff8a63'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='12' fill='url(%23g)'/%3E%3Cg fill='%23fff'%3E%3Ccircle cx='14.1' cy='24' r='3.7'/%3E%3Crect x='21.1' y='17.9' width='4' height='12.2' rx='2' fill-opacity='.9'/%3E%3Crect x='27.5' y='12.8' width='4' height='22.4' rx='2'/%3E%3Crect x='33.9' y='20.5' width='4' height='7' rx='2' fill-opacity='.72'/%3E%3C/g%3E%3C/svg%3E">
 <script>
 /* 主题尽早生效，避免日间模式下先闪一屏深色 */
@@ -578,7 +578,9 @@
             </div>
 
             <div class="ds-preview-col">
-              <div class="th-group-title">实时预览 <span class="muted">按当前选项模拟，保存前也会即时变化</span></div>
+              <div class="th-preview-bar">
+                <span class="th-preview-title">实时预览 <span class="muted">按当前选项模拟，保存前也会即时变化 · 比例跟随画布设置（手动竖屏即竖屏预览）</span></span>
+              </div>
               <div class="ds-preview" id="dsPreview">
                 <div class="ds-area-mask" id="dsAreaMask"></div>
                 <div class="ds-fixed-top" id="dsFixedTop">顶部固定弹幕示例</div>
@@ -590,7 +592,7 @@
                 <div class="ds-sc-plain" id="dsScPlain" hidden>【SC ¥100 观众】醒目留言降级样式示例</div>
                 <div class="ds-fixed-bottom" id="dsFixedBottom">底部固定弹幕示例</div>
               </div>
-              <div class="hint" style="margin-top:6px">预览按预览框像素等比缩放，实际字号随视频真实分辨率自适应；
+              <div class="hint ds-preview-hint">预览按预览框像素等比缩放，实际字号随视频真实分辨率自适应；
                 半透明弹幕在深色画面上效果更明显。</div>
             </div>
           </div>
@@ -991,4 +993,4 @@
 </div>
 
 <div class="toast-wrap" id="toastWrap"></div>
-<script src="/app.js?v=49"></script>
+<script src="/app.js?v=50"></script>
