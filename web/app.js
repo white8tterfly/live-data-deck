@@ -2786,6 +2786,17 @@ $('#btnDsReset').addEventListener('click', async () => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
+/* 「预览弹幕」：预览常驻在表单下方，点击后平滑滚入视口并高亮一次，避免用户手动拖到底部 */
+$('#btnDsPreviewJump').addEventListener('click', () => {
+  const box = document.querySelector('.ds-preview-col');
+  if (!box) return;
+  box.classList.remove('ds-flash');
+  void box.offsetWidth;
+  box.classList.add('ds-flash');
+  box.addEventListener('animationend', () => box.classList.remove('ds-flash'), { once: true });
+  requestAnimationFrame(() => box.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+});
+
 /* ------- 实时预览：与后端同参数的迷你弹幕模拟 ------- */
 /* 预览画布比例跟随画布设置：自动 16:9，手动取手填宽高比（含竖屏） */
 function dsApplyRatio(st) {

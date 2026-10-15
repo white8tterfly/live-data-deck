@@ -1682,6 +1682,8 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   padding: 12px 14px;
   scroll-margin-top: 16px;
 }
+/* 「预览弹幕」跳转后高亮一次：提示预览已在此处（复用战报预览的 thFlash） */
+.ds-preview-col.ds-flash { animation: thFlash 1.5s ease-out 1; }
 .ds-preview {
   position: relative;
   /* 宽度取满内容区与 72vh 高度约束下的较小值，比例由 JS 按画布设置写入变量 */
