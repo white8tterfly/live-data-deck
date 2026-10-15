@@ -14,12 +14,14 @@ import asyncio
 import contextlib
 import json
 import random
+import re
 import struct
 import time
 import zlib
 from collections import deque
 from dataclasses import replace
 from datetime import datetime
+from typing import Callable
 
 import websockets
 
@@ -39,16 +41,36 @@ CONTEXT_N = 20
 EVENT_DEDUP_SEC = 600
 
 
-async def record_room(rt: RoomRuntime, settings: Settings,
-                      bus: EventBus) -> None:
-    """录制一个房间，直到被 manager 取消。settings 为启动时快照。"""
-    opts = {
-        "record_gifts": settings.record_gifts,
-        "filter_pure_emoticon": settings.filter_pure_emoticon,
-        "record_moderation": settings.record_moderation,
-        "anonymize": settings.anonymize,
-        "sanitize_text": settings.sanitize_text,
+def _effective_opts(rt: RoomRuntime, settings: Settings) -> dict:
+    """合并房间级覆盖（rt.ov_*，None=跟随全局快照）后的事件开关。
+
+    在每条 WS 消息分发前调用：房间设置经 PUT 改动后下一条消息即生效。
+    """
+    def eff(ov_name: str, setting_name: str) -> bool:
+        v = getattr(rt, ov_name)
+        return getattr(settings, setting_name) if v is None else v
+
+    return {
+        "record_sc": eff("ov_record_sc", "record_sc"),
+        "record_gifts": eff("ov_record_gifts", "record_gifts"),
+        "record_moderation": eff("ov_record_moderation", "record_moderation"),
+        "filter_pure_emoticon": eff("ov_filter_pure_emoticon",
+                                    "filter_pure_emoticon"),
+        "anonymize": eff("ov_anonymize", "anonymize"),
+        "sanitize_text": eff("ov_sanitize_text", "sanitize_text"),
     }
+
+
+async def record_room(rt: RoomRuntime, settings: Settings,
+                      bus: EventBus,
+                      video_enabled: Callable[[], bool] | None = None) -> None:
+    """录制一个房间，直到被 manager 取消。
+
+    settings 为启动时快照；rt.ov_* 房间级覆盖由管理器随 PUT 动态更新，
+    事件类开关每条消息实时解析，无需重启任务。
+    video_enabled 返回全局视频开关的实时值，使设置页开关切换对运行中
+    任务即时生效（正在直播立即起录）；不传则回退快照语义。
+    """
     sessdata = settings.effective_sessdata()
     salt = settings.effective_salt()
     records_dir = settings.records_dir
@@ -77,31 +99,26 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                 + ("" if sessdata else "（游客模式，稳定性可能较差）"),
                 rt.room_id)
 
-        # 视频直录：与弹幕 WS 并联的独立协程（全局开关为任务快照，房间开关可动态切换）
-        if settings.video_enabled:
-            video_task = asyncio.create_task(
-                video_supervise(rt, session, settings, bus),
-                name=f"video-{rt.room_id}")
+        # 视频直录：与弹幕 WS 并联的独立协程，始终启动；
+        # 协程内部按「全局实时开关 + 房间动态开关」门控，未开启时零网络开销
+        video_task = asyncio.create_task(
+            video_supervise(rt, session, settings, bus, global_on=video_enabled),
+            name=f"video-{rt.room_id}")
 
-            def _video_done(t: asyncio.Task) -> None:
-                if t.cancelled():
-                    return
-                if t.exception():
-                    bus.log("error",
-                            f"[{rt.vup}] 视频录制协程异常退出: "
-                            f"{type(t.exception()).__name__}: {t.exception()}",
-                            rt.room_id)
+        def _video_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            if t.exception():
+                bus.log("error",
+                        f"[{rt.vup}] 视频录制协程异常退出: "
+                        f"{type(t.exception()).__name__}: {t.exception()}",
+                        rt.room_id)
 
-            video_task.add_done_callback(_video_done)
-        elif rt.record_video:
-            bus.log("info",
-                    f"[{rt.vup}] 该房间已勾选视频录制，但全局视频开关未启用，"
-                    f"暂不录视频（可在设置页开启后重启任务）", rt.room_id)
+        video_task.add_done_callback(_video_done)
 
         state: dict = {
             "recent": deque(maxlen=RECENT_MAX_N),  # (uid明文, rec)
             "recent_events": {},                    # uid明文 -> 上次处置 ts
-            "opts": opts,
         }
         if session.live_status == 1:
             f = storage.ensure_out_file(session, rt, records_dir)
@@ -238,6 +255,8 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                             if isinstance(raw, str):
                                 raw = raw.encode()
                             buf += raw
+                            # 每帧重新合并房间覆盖：设置改动无需重连即生效
+                            opts = _effective_opts(rt, settings)
                             while len(buf) >= 16:
                                 plen, _, protover, op, _ = struct.unpack(
                                     ">IHHII", buf[:16])
@@ -404,8 +423,21 @@ def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
         uname = user[1] if len(user) > 1 else ""
         medal = info[3] if len(info) > 3 else []
         mode = 1
+        color = 0
+        font_size = 0
         if isinstance(info[0], (list, tuple)) and len(info[0]) > 1:
             mode = info[0][1]
+            # info[0]: [时间戳ms, 模式(1滚/4底/5顶), 字号, 颜色十进制 0xRRGGBB, ...]
+            if len(info[0]) > 2:
+                try:
+                    font_size = int(info[0][2] or 0)
+                except (TypeError, ValueError):
+                    font_size = 0
+            if len(info[0]) > 3:
+                try:
+                    color = int(info[0][3] or 0)
+                except (TypeError, ValueError):
+                    color = 0
         rec = {
             "_type": "danmaku",
             "text": text,
@@ -417,6 +449,10 @@ def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
             "ts": int(time.time()),
             "mode": mode,
         }
+        if color > 0:
+            rec["color"] = color      # 弹幕原色（ASS 渲染用；老文件无此键=白字）
+        if font_size > 0:
+            rec["fontsize"] = font_size
         state["recent"].append((uid, rec))
         out_file = storage.ensure_out_file(session, rt, records_dir)
         if out_file:
@@ -428,6 +464,8 @@ def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
             })
 
     elif cmd == "SUPER_CHAT_MESSAGE":
+        if not opts["record_sc"]:
+            return
         d = msg.get("data", {})
         uid = d.get("uid", 0)
         uname = d.get("user_info", {}).get("uname", "")
@@ -443,6 +481,20 @@ def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
             "price_rmb": d.get("price", 0),
             "ts": int(time.time()),
         }
+        # ASS SC 卡片渲染所需：停留秒数与 B 站下发的等级配色（#RRGGBB 字符串）；
+        # 老文件无这些键时渲染走「金额内建等级色 + 10s」兜底
+        try:
+            sc_time = int(d.get("time") or 0)
+        except (TypeError, ValueError):
+            sc_time = 0
+        if sc_time > 0:
+            rec["sc_time"] = min(sc_time, 300)
+        for _k, _field in (("sc_bg", "background_bottom_color"),
+                           ("sc_fg", "content_color"),
+                           ("sc_price_color", "background_price_color")):
+            _v = d.get(_field)
+            if isinstance(_v, str) and re.match(r"^#[0-9a-fA-F]{6}$", _v.strip()):
+                rec[_k] = _v.strip().upper()
         out_file = storage.ensure_out_file(session, rt, records_dir)
         if out_file:
             storage.append_record(out_file, rec, rt, "super_chat")

@@ -14,7 +14,8 @@ from .filters import record_user_key
 
 TIMELINE_BUCKETS = 48
 PEAK_MINUTES = 5
-PEAK_SAMPLES = 50
+PEAK_TOP_TEXTS = 20          # 每个高能分钟展开后展示的去重高频弹幕条数
+PEAK_TOP_SC = 10             # 同一分钟内去重后的高频 SC 条数
 TOP_N = 20
 
 LEN_LABELS = ("1-5字", "6-10字", "11-20字", "21-50字", "50字+")
@@ -154,27 +155,58 @@ def analyze_files(paths: list[Path]) -> dict:
     else:
         peak_idx = 0
 
-    # ---- 高能分钟 Top 5（二次扫描取样例） ----
+    # ---- 高能分钟 Top 5（二次扫描：按内容去重统计高频弹幕 / SC） ----
     peak_mins = sorted(minutes.items(), key=lambda kv: kv[1],
                        reverse=True)[:PEAK_MINUTES]
     peak_set = {m for m, _ in peak_mins}
-    samples: dict[int, list] = defaultdict(list)
+    minute_texts: dict[int, Counter] = defaultdict(Counter)
+    minute_sc: dict[int, Counter] = defaultdict(Counter)
+    minute_sc_price: dict[int, dict[str, float]] = defaultdict(dict)
     for p in paths:
         for rec in _iter_records(p):
-            if rec.get("_type") != "danmaku":
-                continue
             ts = int(rec.get("ts", 0) or 0)
+            if not ts:
+                continue
             m = ts - ts % 60
-            if m in peak_set and len(samples[m]) < PEAK_SAMPLES:
-                samples[m].append({"ts": ts, "uname": rec.get("uname_anon", ""),
-                                   "text": rec.get("text", "")})
-    peak_minutes = [{
-        "ts": m,
-        "label": time.strftime("%m-%d %H:%M", time.localtime(m)),
-        "count": c,
-        "users": len(minute_users.get(m, ())),
-        "samples": sorted(samples.get(m, []), key=lambda x: x["ts"]),
-    } for m, c in peak_mins]
+            if m not in peak_set:
+                continue
+            typ = rec.get("_type")
+            if typ == "danmaku":
+                text = (rec.get("text") or "").strip()
+                if text:
+                    minute_texts[m][text[:80]] += 1
+            elif typ == "super_chat":
+                text = (rec.get("text") or "").strip() or "（无留言 SC）"
+                key = text[:80]
+                minute_sc[m][key] += 1
+                try:
+                    minute_sc_price[m][key] = float(rec.get("price_rmb") or 0)
+                except (TypeError, ValueError):
+                    minute_sc_price[m].setdefault(key, 0.0)
+    peak_minutes = []
+    for m, c in peak_mins:
+        sc_counter = minute_sc.get(m, Counter())
+        sc_prices = minute_sc_price.get(m, {})
+        top_texts = [{"text": t, "count": n}
+                     for t, n in minute_texts.get(m, Counter())
+                     .most_common(PEAK_TOP_TEXTS)]
+        top_sc = []
+        for t, n in sc_counter.most_common(PEAK_TOP_SC):
+            price = round(sc_prices.get(t, 0.0), 2)
+            top_sc.append({"text": t, "count": n, "price": price,
+                           "amount": round(price * n, 2)})
+        peak_minutes.append({
+            "ts": m,
+            "label": time.strftime("%m-%d %H:%M", time.localtime(m)),
+            "count": c,
+            "users": len(minute_users.get(m, ())),
+            "sc_count": sum(sc_counter.values()),
+            "sc_amount": round(
+                sum(sc_prices.get(t, 0.0) * n for t, n in sc_counter.items()),
+                2),
+            "top_texts": top_texts,
+            "top_sc": top_sc,
+        })
 
     span_sec = (t_max - t_min) if t_min and t_max else 0
     avg_per_min = round(total_dm / span_sec * 60, 1) if span_sec else 0

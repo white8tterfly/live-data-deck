@@ -3,16 +3,25 @@
 - emit() 可在同步/异步上下文中调用（put_nowait，绝不阻塞录制循环）
 - 每个订阅者独立队列；慢消费者丢老消息，不影响其它订阅者
 - 最近 LOG_KEEP 条日志环形留存，供新打开的页面补发
+- 日志同时按天滚动落盘（app.log，保留 LOG_KEEP_DAYS 天），由独立线程写盘
 """
 from __future__ import annotations
 
 import asyncio
+import logging
+import queue
 import time
 from collections import deque
+from pathlib import Path
+from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from typing import Any
 
 LOG_KEEP = 500
+LOG_KEEP_DAYS = 14
 LOG_LEVELS = ("debug", "info", "warning", "error")
+_LOG_LEVEL_NO = {"debug": logging.DEBUG, "info": logging.INFO,
+                 "warning": logging.WARNING, "error": logging.ERROR}
+_LOG_FILE_NAME = "app.log"
 
 
 class EventBus:
@@ -21,6 +30,12 @@ class EventBus:
         self._subscribers: set[asyncio.Queue] = set()
         self._pump_task: asyncio.Task | None = None
         self.log_buffer: deque[dict] = deque(maxlen=LOG_KEEP)
+        # 文件日志（后台线程写盘，绝不阻塞事件循环）
+        self._file_dir: Path | None = None
+        self._file_queue: "queue.Queue | None" = None
+        self._file_listener: QueueListener | None = None
+        self._file_handler: TimedRotatingFileHandler | None = None
+        self._file_logger: logging.Logger | None = None
 
     async def start(self) -> None:
         self._queue = asyncio.Queue(maxsize=10000)
@@ -35,6 +50,67 @@ class EventBus:
                 q.put_nowait({"type": "shutdown", "ts": time.time(), "data": {}})
             except Exception:
                 pass
+        self.close_log_file()
+
+    # ---------- 文件日志 ----------
+    def configure_log_file(self, log_dir: Path) -> Path:
+        """启用/切换按天滚动的文件日志。目录不存在则创建；同目录重复调用幂等。
+
+        写盘经 QueueHandler 丢给独立线程，调用方（事件循环）只做一次非阻塞入队。
+        """
+        log_dir = Path(log_dir)
+        if self._file_dir is not None and self._file_dir == log_dir.resolve():
+            return self._file_dir
+        self.close_log_file()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        q: queue.Queue = queue.Queue(-1)
+        handler = TimedRotatingFileHandler(
+            log_dir / _LOG_FILE_NAME, when="midnight",
+            backupCount=LOG_KEEP_DAYS, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"))
+        listener = QueueListener(q, handler, respect_handler_level=True)
+        listener.start()
+        lg = logging.getLogger("ldd.eventbus.file")
+        lg.setLevel(logging.DEBUG)
+        lg.propagate = False  # 不冒泡到 root，避免在控制台重复打印
+        lg.addHandler(QueueHandler(q))
+        self._file_dir = log_dir.resolve()
+        self._file_queue = q
+        self._file_listener = listener
+        self._file_handler = handler
+        self._file_logger = lg
+        return self._file_dir
+
+    def close_log_file(self) -> None:
+        """停止后台写盘线程并关闭句柄（设置中切换目录 / 服务关闭时调用）。"""
+        if self._file_logger is not None:
+            for h in list(self._file_logger.handlers):
+                self._file_logger.removeHandler(h)
+                try:
+                    h.close()
+                except Exception:
+                    pass
+            self._file_logger = None
+        if self._file_listener is not None:
+            try:
+                self._file_listener.stop()
+            except Exception:
+                pass
+            self._file_listener = None
+        if self._file_handler is not None:
+            try:
+                self._file_handler.close()
+            except Exception:
+                pass
+            self._file_handler = None
+        self._file_queue = None
+        self._file_dir = None
+
+    @property
+    def log_file_dir(self) -> Path | None:
+        return self._file_dir
 
     def emit(self, type_: str, data: dict[str, Any] | None = None) -> None:
         if self._queue is None:
@@ -54,6 +130,12 @@ class EventBus:
         rec = {"level": level, "msg": msg, "room_id": room_id,
                "ts": time.time()}
         self.log_buffer.append(rec)
+        if self._file_logger is not None:
+            try:
+                text = f"[room {room_id}] {msg}" if room_id else msg
+                self._file_logger.log(_LOG_LEVEL_NO[level], "%s", text)
+            except Exception:
+                pass  # 文件日志失败绝不影响录制与页面日志
         self.emit("log", rec)
 
     def recent_logs(self, limit: int = 300) -> list[dict]:

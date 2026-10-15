@@ -9,12 +9,17 @@ class TargetIn(BaseModel):
     vup: str = ""
     enabled: bool = True
     record_video: bool = False
+    notify: bool = False
 
 
 class TargetPatch(BaseModel):
     vup: str | None = None
     enabled: bool | None = None
     record_video: bool | None = None
+    notify: bool | None = None
+    # 房间级覆盖：key 见 config.ROOM_BOOL_OVERRIDES / ROOM_INT_OVERRIDES；
+    # 值显式为 null 表示恢复「跟随全局」。校验在 config.coerce_room_overrides。
+    overrides: dict | None = None
 
 
 class TargetBulkItem(BaseModel):

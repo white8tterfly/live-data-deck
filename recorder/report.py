@@ -247,6 +247,21 @@ def _text_w(draw, txt, font) -> int:
     return int(draw.textlength(str(txt), font=font))
 
 
+def _fit_font(draw, txt, fonts: "FontResolver", start_size: int, max_w: int,
+              min_size: int = 11, bold: bool = False):
+    """从 start_size 起逐号缩小，直到文字宽度不超过 max_w。
+
+    保证任何内容（长数字 / 长用户名）在任何字号档位、任何列数下
+    都不会画出卡片/面板边界；返回 (font, actual_size)。
+    """
+    size = max(1, int(start_size))
+    font = fonts.get(size, bold=bold)
+    while size > min_size and _text_w(draw, txt, font) > max_w:
+        size -= 1
+        font = fonts.get(size, bold=bold)
+    return font, size
+
+
 def _wrap(draw, txt, font, max_w):
     lines, cur = [], ""
     for ch in str(txt):
@@ -352,7 +367,11 @@ def _card_defs(s: dict):
 # ---------- 五个可排序/可隐藏的主区块 ----------
 
 def _sec_summary(img, d, s, th, pal, fonts, x, y, w):
-    cover_w, cover_h = 420, 236
+    # 封面比例约 16:9；横屏宽幅给更大封面，竖屏长图保持紧凑
+    if th.orientation == "landscape":
+        cover_w, cover_h = 620, 349
+    else:
+        cover_w, cover_h = 420, 236
     if th.show_cover:
         cover_img = _download_cover(s["cover_url"])
         cover = (_cover_round(cover_img, cover_w, cover_h) if cover_img
@@ -397,24 +416,34 @@ def _sec_cards(img, d, s, th, pal, fonts, x, y, w):
     cols, gap = th.card_cols, 14
     cw = (w - gap * (cols - 1)) // cols
     ch = max(1, int(96 * th.font_scale))
-    f_label = fonts.get(14)
-    f_value = fonts.get(30, bold=True)
-    f_long = fonts.get(24, bold=True)
+    pad = 16                       # 卡内左右内边距
+    avail = max(1, cw - pad * 2)  # 文字可用宽度
     for i, (_, label, value, cname) in enumerate(cards):
         r, c = divmod(i, cols)
         cx = x + c * (cw + gap)
         cy = y + r * (ch + gap)
         _panel(d, img, cx, cy, cw, ch, pal, r=12)
-        d.text((cx + 14, cy + 14), label, font=f_label, fill=pal.text3)
-        vf = f_long if len(str(value)) > 9 else f_value
-        d.text((cx + 14, cy + max(1, int(42 * th.font_scale))),
-               str(value), font=vf, fill=getattr(pal, cname))
+        # 标签：14px 起步，超长自动缩小，保证单行不出格
+        f_label, _ = _fit_font(d, label, fonts, 14, avail, min_size=10)
+        d.text((cx + pad, cy + 13), label, font=f_label, fill=pal.text3)
+        # 数值：30px 粗体起步（长串从 26px 起），逐号缩放到入格；底对齐
+        vtxt = str(value)
+        start = 26 if len(vtxt) > 8 else 30
+        f_value, vsize = _fit_font(d, vtxt, fonts, start, avail,
+                                   min_size=12, bold=True)
+        try:
+            ascent, descent = f_value.getmetrics()
+            vh = ascent + descent
+        except AttributeError:
+            vh = vsize
+        vy = cy + ch - 12 - vh
+        d.text((cx + pad, vy), vtxt, font=f_value, fill=getattr(pal, cname))
     rows = (len(cards) + cols - 1) // cols
     return y + rows * ch + (rows - 1) * gap + 24
 
 
 def _sec_pop(img, d, s, th, pal, fonts, x, y, w):
-    pop_h = 300
+    pop_h = 400 if th.orientation == "landscape" else 300
     _panel(d, img, x, y, w, pop_h, pal)
     f_h2 = fonts.get(20, bold=True)
     d.text((x + 20, y + 16), "观看人气曲线", font=f_h2, fill=pal.text)
@@ -431,7 +460,7 @@ def _sec_pop(img, d, s, th, pal, fonts, x, y, w):
 
 
 def _sec_dm(img, d, s, th, pal, fonts, x, y, w):
-    dm_h = 210
+    dm_h = 280 if th.orientation == "landscape" else 210
     _panel(d, img, x, y, w, dm_h, pal)
     d.text((x + 20, y + 16), "弹幕时间分布",
            font=fonts.get(20, bold=True), fill=pal.text)
@@ -459,9 +488,8 @@ def _sec_ranklists(img, d, s, th, pal, fonts, x, y, w):
     gap = 14
     n = len(keys)
     col_w = (w - gap * (n - 1)) // n
-    list_h = 330
+    list_h = 380 if th.orientation == "landscape" else 330
     f_h2 = fonts.get(20, bold=True)
-    f_body = fonts.get(16)
     for i, k in enumerate(keys):
         title_s, rows = _RANK_DEFS[k][0], _RANK_DEFS[k][1](s)
         cx = x + i * (col_w + gap)
@@ -469,7 +497,11 @@ def _sec_ranklists(img, d, s, th, pal, fonts, x, y, w):
         d.text((cx + 18, y + 16), title_s, font=f_h2, fill=pal.text)
         ry = y + 58
         for cname, row_text in rows:
-            d.text((cx + 18, ry), row_text, font=f_body, fill=getattr(pal, cname))
+            # 每行单独 fit：长用户名 / 长弹幕在任何列宽与字号档位下都不出格
+            f_body, _ = _fit_font(d, row_text, fonts, 16, col_w - 36,
+                                  min_size=11)
+            d.text((cx + 18, ry), row_text, font=f_body,
+                   fill=getattr(pal, cname))
             ry += 26
             if ry > y + list_h - 30:
                 break

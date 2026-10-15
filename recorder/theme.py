@@ -100,8 +100,31 @@ COLOR_META = (
 
 FONT_EXT = (".ttf", ".ttc", ".otf")
 FONT_SCALES = (0.92, 1.0, 1.12)   # 小 / 标准 / 大
-WIDTH_CHOICES = (1080, 1280, 1440)
-CARD_COLS_CHOICES = (4, 5, 6)
+
+# 画布方向：竖屏长图适配手机竖屏浏览（9:16 友好），
+# 横屏宽幅适配手机横屏 / 电脑查看（16:9 友好）
+ORIENTATIONS = ("portrait", "landscape")
+ORIENTATION_META = {
+    "portrait": {
+        "label": "竖屏长图（手机竖屏看，窄而长）",
+        "widths": (1080, 1280, 1440),
+        "card_cols": (2, 3, 4),
+        "default_width": 1080,
+        "default_card_cols": 3,
+    },
+    "landscape": {
+        "label": "横屏宽幅（手机横屏 / 电脑看，宽而短）",
+        "widths": (1600, 1920),
+        "card_cols": (4, 5, 6),
+        "default_width": 1920,
+        "default_card_cols": 5,
+    },
+}
+# 校验用并集（允许旧配置里的组合继续加载）
+WIDTH_CHOICES = tuple(sorted({
+    w for m in ORIENTATION_META.values() for w in m["widths"]}))
+CARD_COLS_CHOICES = tuple(sorted({
+    c for m in ORIENTATION_META.values() for c in m["card_cols"]}))
 
 _HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -128,8 +151,9 @@ class ReportTheme:
     font_scale: float = 1.0
 
     # 排版
+    orientation: str = "portrait"   # portrait 竖屏长图 / landscape 横屏宽幅
     width: int = 1080
-    card_cols: int = 5
+    card_cols: int = 3
     brand: str = "直 播 数 据 舱 · 单 场 战 报"
     footer_note: str = ""
 
@@ -220,6 +244,12 @@ def coerce_theme(patch: dict, base: ReportTheme | None = None) -> ReportTheme:
         if fs not in FONT_SCALES:
             raise ValueError("字号档位必须是 0.92 / 1.0 / 1.12 之一")
         kw["font_scale"] = fs
+
+    if patch.get("orientation") is not None:
+        ori = str(patch["orientation"]).strip()
+        if ori not in ORIENTATIONS:
+            raise ValueError("画布方向必须是 portrait / landscape 之一")
+        kw["orientation"] = ori
 
     if patch.get("width") is not None:
         try:

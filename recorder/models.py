@@ -37,6 +37,16 @@ class RoomRuntime:
 
     # 视频录制（附加功能；record_video 为该房间的独立开关，可在运行中动态切换）
     record_video: bool = False
+    notify: bool = False               # 开播提醒订阅（浏览器通知/邮件等通道共用）
+    # 房间级配置覆盖（None=跟随全局默认；与 config.Target 同名，ov_ 前缀避免与运行态混淆）
+    ov_record_sc: bool | None = None
+    ov_record_gifts: bool | None = None
+    ov_record_moderation: bool | None = None
+    ov_filter_pure_emoticon: bool | None = None
+    ov_anonymize: bool | None = None
+    ov_sanitize_text: bool | None = None
+    ov_video_qn: int | None = None
+    ov_llm_auto_analyze: bool | None = None
     video_active: bool = False        # 视频流是否正在落盘
     video_session: str = ""           # 场次文件名前缀 live_YYYYMMDD_HHMM
     video_file: str = ""              # 当前分段文件名
@@ -136,6 +146,7 @@ class RoomRuntime:
             "popularity_now": self.popularity_now,
             "popularity_peak": self.popularity_peak,
             "record_video": self.record_video,
+            "notify": self.notify,
             "video_active": self.video_active,
             "video_session": self.video_session,
             "video_file": self.video_file,
@@ -146,4 +157,14 @@ class RoomRuntime:
             "video_qn": self.video_qn,
             "video_error": self.video_error,
             "counters": dict(self.counters),
+            "overrides": {
+                "record_sc": self.ov_record_sc,
+                "record_gifts": self.ov_record_gifts,
+                "record_moderation": self.ov_record_moderation,
+                "filter_pure_emoticon": self.ov_filter_pure_emoticon,
+                "anonymize": self.ov_anonymize,
+                "sanitize_text": self.ov_sanitize_text,
+                "video_qn": self.ov_video_qn,
+                "llm_auto_analyze": self.ov_llm_auto_analyze,
+            },
         }

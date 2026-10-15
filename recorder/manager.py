@@ -43,6 +43,11 @@ class RecorderManager:
     async def start(self) -> None:
         self.started_at = time.time()
         await self.bus.start()
+        try:
+            self.bus.configure_log_file(self.settings.log_path())
+        except OSError as e:
+            # 日志落盘失败不阻断服务（页面内存日志仍可用）
+            print(f"[manager] 日志目录初始化失败：{e}", flush=True)
         for t in self.target_store.targets:
             self.runtimes[t.room_id] = self._make_rt(t)
         self._snapshot_task = asyncio.create_task(self._snapshot_loop())
@@ -59,7 +64,21 @@ class RecorderManager:
     def _make_rt(self, t: Target) -> RoomRuntime:
         rt = RoomRuntime(room_id=t.room_id, vup=t.vup, enabled=t.enabled)
         rt.record_video = t.record_video
+        rt.notify = t.notify
+        self._apply_overrides(rt, t)
         return rt
+
+    @staticmethod
+    def _apply_overrides(rt: RoomRuntime, t: Target) -> None:
+        """把 Target 的房间级覆盖项同步到运行时（None=跟随全局）。"""
+        rt.ov_record_sc = t.record_sc
+        rt.ov_record_gifts = t.record_gifts
+        rt.ov_record_moderation = t.record_moderation
+        rt.ov_filter_pure_emoticon = t.filter_pure_emoticon
+        rt.ov_anonymize = t.anonymize
+        rt.ov_sanitize_text = t.sanitize_text
+        rt.ov_video_qn = t.video_qn
+        rt.ov_llm_auto_analyze = t.llm_auto_analyze
 
     async def _snapshot_loop(self) -> None:
         while True:
@@ -70,15 +89,18 @@ class RecorderManager:
     async def add_target(self, room_id: int, vup: str,
                          enabled: bool = True, persist: bool = True,
                          autostart: bool = True,
-                         record_video: bool = False) -> Target:
+                         record_video: bool = False,
+                         notify: bool = False) -> Target:
         if room_id in self.runtimes:
             raise ValueError(f"房间 {room_id} 已存在")
         if persist:
             t = self.target_store.add(room_id, vup, enabled,
-                                      record_video=record_video)
+                                      record_video=record_video,
+                                      notify=notify)
         else:
             t = Target(room_id=room_id, vup=vup or f"room_{room_id}",
-                       enabled=enabled, record_video=record_video)
+                       enabled=enabled, record_video=record_video,
+                       notify=notify)
         self.runtimes[room_id] = self._make_rt(t)
         self.bus.log("info", f"已添加房间 {room_id}（{t.vup}）")
         if autostart and t.enabled:
@@ -121,27 +143,46 @@ class RecorderManager:
 
     async def update_target(self, room_id: int, vup: str | None = None,
                             enabled: bool | None = None,
-                            record_video: bool | None = None) -> Target:
+                            record_video: bool | None = None,
+                            notify: bool | None = None,
+                            overrides: dict | None = None) -> Target:
         t = self.target_store.update(room_id, vup, enabled,
-                                     record_video=record_video)
+                                     record_video=record_video,
+                                     notify=notify, overrides=overrides)
         rt = self.runtimes.get(room_id)
         if rt:
             rt.vup = t.vup
             rt.enabled = t.enabled
-            # 房间级视频开关：运行中动态生效，无需重启任务
+            # 房间级视频开关：运行中动态生效，正在直播最迟 2s 起录
             if record_video is not None:
                 rt.record_video = t.record_video
-                if t.record_video and not self.settings.video_enabled:
+                if not t.record_video:
                     self.bus.log(
                         "info",
-                        f"房间 {rt.vup} 已勾选视频录制，但全局视频开关未启用；"
-                        f"请在设置页开启（运行中的弹幕任务需重启后生效）",
+                        f"房间 {rt.vup} 视频录制已关闭"
+                        f"（正在录制的场次结束后停止，之后不再自动起录）",
+                        room_id)
+                elif not self.settings.video_enabled:
+                    self.bus.log(
+                        "info",
+                        f"房间 {rt.vup} 已勾选视频录制；请在设置页开启全局视频开关"
+                        f"（开启后正在直播立即起录，未开播则开播自动起录）",
                         room_id)
                 else:
                     self.bus.log(
                         "info",
-                        f"房间 {rt.vup} 视频录制已{'开启' if t.record_video else '关闭'}"
-                        f"（下一场开播生效）", room_id)
+                        f"房间 {rt.vup} 视频录制已开启"
+                        f"（正在直播立即起录，未开播则开播自动起录）",
+                        room_id)
+            if notify is not None:
+                rt.notify = t.notify
+            if overrides is not None:
+                # 弹幕事件类覆盖由 room_task 每条消息实时读取，立即生效；
+                # 画质在下次取流/重连生效；AI 自动解读在下一场结束判定时生效
+                self._apply_overrides(rt, t)
+                self.bus.log("info",
+                             f"房间 {rt.vup} 的房间级录制配置已更新"
+                             f"（事件开关立即生效，画质下次取流生效）", room_id)
         self.bus.emit("room_state", rt.snapshot() if rt else {})
         return t
 
@@ -163,10 +204,12 @@ class RecorderManager:
         if self.is_running(room_id):
             return
         rt.enabled = True
-        # 每个任务持有设置快照：任务运行期间不受后续配置变更影响
+        # 每个任务持有设置快照：任务运行期间一般配置不受后续变更影响；
+        # 但视频全局开关通过 provider 实时读取，设置页切换即时生效
         snap = replace(self.settings)
         task = asyncio.create_task(
-            record_room(rt, snap, self.bus),
+            record_room(rt, snap, self.bus,
+                        video_enabled=lambda: self.settings.video_enabled),
             name=f"record-{room_id}")
         self.tasks[room_id] = task
         self.bus.emit("room_state", rt.snapshot())
@@ -227,8 +270,16 @@ class RecorderManager:
         old_sess = self.settings.effective_sessdata()
         old_records = str(self.settings.records_dir)
         old_weak = str(self.settings.weak_dir)
+        old_log = str(self.settings.log_path())
         s = self.settings_store.update(patch)
         self.settings = s
+        # 日志目录变更：热切换文件句柄，不影响录制任务
+        if str(s.log_path()) != old_log:
+            try:
+                self.bus.configure_log_file(s.log_path())
+                self.bus.log("info", f"日志目录已切换：{s.log_path()}")
+            except OSError as e:
+                self.bus.log("error", f"日志目录切换失败：{e}")
         path_changed = (str(s.records_dir) != old_records
                         or str(s.weak_dir) != old_weak)
         # SESSDATA 或存储路径变更：滚动重启运行中的房间使其生效
@@ -286,11 +337,12 @@ class RecorderManager:
     def snapshot(self) -> dict:
         rooms = [self.runtimes[t.room_id].snapshot()
                  if t.room_id in self.runtimes else
-                 RoomRuntime(t.room_id, t.vup, t.enabled).snapshot()
+                 self._make_rt(t).snapshot()
                  for t in self.target_store.targets]
         totals = {"danmaku": 0, "super_chat": 0, "gift": 0,
                   "emoticon_skipped": 0, "moderation": 0}
         running = connected = live = 0
+        video_active = video_armed = 0
         rate = 0
         for r in rooms:
             if r["running"]:
@@ -299,6 +351,11 @@ class RecorderManager:
                 connected += 1
             if r["live_status"] == 1 and r["running"]:
                 live += 1
+            # 视频录制独立计数：active=视频流正在落盘；armed=任务运行中且该房间已勾选视频
+            if r.get("video_active"):
+                video_active += 1
+            if r["running"] and r.get("record_video"):
+                video_armed += 1
             rate += r["rate_per_min"]
             for k in totals:
                 totals[k] += r["counters"].get(k, 0)
@@ -309,6 +366,8 @@ class RecorderManager:
             "running_count": running,
             "connected_count": connected,
             "live_count": live,
+            "video_active_count": video_active,
+            "video_armed_count": video_armed,
             "rate_per_min": rate,
             "totals": totals,
             "settings": self.settings.public_dict(),

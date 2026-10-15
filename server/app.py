@@ -4,7 +4,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -19,11 +23,14 @@ from recorder import llm_analyze as llm_mod
 from recorder import media as media_mod
 from recorder import report as report_mod
 from recorder import video_recorder as vr_mod
+from recorder import bili_login as bili_login_mod
+from recorder import danmaku_style as ds_mod
 from recorder.config import LLM_MODES, WEB_DIR
 from recorder.manager import RecorderManager
 from recorder.session import verify_sessdata
 from recorder.theme import (CARD_META, CARD_COLS_CHOICES, COLOR_META,
-                            FONT_SCALES, RANK_META, SECTION_META,
+                            FONT_SCALES, ORIENTATION_META, ORIENTATIONS,
+                            RANK_META, SECTION_META,
                             ReportTheme, WIDTH_CHOICES, coerce_theme)
 from recorder import following as following_mod
 from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
@@ -33,6 +40,24 @@ from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
 
 PREVIEW_BYTES = 256 * 1024   # 大文件只从尾部读 256KB
 PREVIEW_MAX_LINES = 500
+
+
+def _reveal_in_os(target: Path) -> None:
+    """在本机文件管理器中打开目录；给的是文件则打开父目录并选中该文件。
+
+    本机自部署工具：仅由后端依据运行时 current_file 拼路径调用，不接受前端传路径。
+    Windows 下 explorer.exe 无论成功与否退出码恒为 1，不能据此判错。
+    """
+    if sys.platform == "win32":
+        if target.is_dir():
+            os.startfile(str(target))  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["explorer.exe", f"/select,{target}"])
+    elif sys.platform == "darwin":
+        args = ["open", "-R", str(target)] if target.is_file() else ["open", str(target)]
+        subprocess.Popen(args)
+    else:
+        subprocess.Popen(["xdg-open", str(target.parent if target.is_file() else target)])
 
 
 def create_app() -> FastAPI:
@@ -51,6 +76,9 @@ def create_app() -> FastAPI:
     def mgr() -> RecorderManager:
         return app.state.mgr
 
+    # 烧录弹幕版导出的进程内任务表：key = "<vup>/<session base>"
+    _export_jobs: dict[str, dict] = {}
+
     # ---------------- 状态 ----------------
     @app.get("/api/state")
     async def get_state():
@@ -58,7 +86,38 @@ def create_app() -> FastAPI:
 
     @app.get("/api/logs")
     async def get_logs(limit: int = Query(300, ge=1, le=1000)):
-        return {"logs": mgr().bus.recent_logs(limit)}
+        return {"logs": mgr().bus.recent_logs(limit),
+                "dir": str(mgr().settings.log_path())}
+
+    @app.post("/api/logs/open-folder")
+    async def open_log_folder():
+        """在文件管理器中打开日志保存目录。路径由服务端配置派生，不接受前端传参。"""
+        target = mgr().settings.log_path().resolve()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"日志目录无法创建：{e}")
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, _reveal_in_os, target)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(status_code=500, detail=f"无法打开文件管理器：{e}")
+        return {"ok": True, "path": str(target)}
+
+    @app.post("/api/data/open-folder")
+    async def open_data_folder():
+        """在文件管理器中打开数据保存根目录。路径由服务端配置派生，不接受前端传参。"""
+        target = mgr().settings.data_path().resolve()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"数据目录无法创建：{e}")
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, _reveal_in_os, target)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(status_code=500, detail=f"无法打开文件管理器：{e}")
+        return {"ok": True, "path": str(target)}
 
     # ---------------- 设置 ----------------
     @app.put("/api/settings")
@@ -78,6 +137,21 @@ def create_app() -> FastAPI:
             return {"ok": False, "message": "未填写 SESSDATA"}
         return await asyncio.to_thread(verify_sessdata, sessdata)
 
+    # ---------------- B 站扫码登录（半自动获取 SESSDATA）----------------
+    @app.post("/api/bili-qrcode/generate")
+    async def bili_qr_generate():
+        try:
+            return await asyncio.to_thread(bili_login_mod.generate_qr)
+        except bili_login_mod.BiliLoginError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+    @app.get("/api/bili-qrcode/poll")
+    async def bili_qr_poll(qrcode_key: str):
+        try:
+            return await asyncio.to_thread(bili_login_mod.poll_qr, qrcode_key)
+        except bili_login_mod.BiliLoginError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
     @app.post("/api/settings/test-llm")
     async def test_llm(body: LlmTestIn):
         s = mgr().settings
@@ -93,11 +167,29 @@ def create_app() -> FastAPI:
             return {"ok": False, "message": str(e)}
 
     # ---------------- 房间管理 ----------------
+    def _target_payload(t) -> dict:
+        """Target 序列化（含房间级覆盖项；dataclass 新增字段自动带上）。"""
+        from dataclasses import asdict
+        d = asdict(t)
+        d.pop("added_at", None)
+        return d
+
     @app.get("/api/targets")
     async def list_targets():
         return {"targets": [
             {"room_id": t.room_id, "vup": t.vup, "enabled": t.enabled,
-             "record_video": t.record_video, "added_at": t.added_at}
+             "record_video": t.record_video, "notify": t.notify,
+             "added_at": t.added_at,
+             "overrides": {
+                 "record_sc": t.record_sc,
+                 "record_gifts": t.record_gifts,
+                 "record_moderation": t.record_moderation,
+                 "filter_pure_emoticon": t.filter_pure_emoticon,
+                 "anonymize": t.anonymize,
+                 "sanitize_text": t.sanitize_text,
+                 "video_qn": t.video_qn,
+                 "llm_auto_analyze": t.llm_auto_analyze,
+             }}
             for t in mgr().target_store.targets]}
 
     @app.post("/api/targets", status_code=201)
@@ -105,24 +197,23 @@ def create_app() -> FastAPI:
         try:
             t = await mgr().add_target(
                 body.room_id, body.vup.strip(), body.enabled,
-                record_video=body.record_video)
+                record_video=body.record_video, notify=body.notify)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        return {"room_id": t.room_id, "vup": t.vup, "enabled": t.enabled,
-                "record_video": t.record_video}
+        return _target_payload(t)
 
     @app.put("/api/targets/{room_id}")
     async def update_target(room_id: int, body: TargetPatch):
         try:
             t = await mgr().update_target(
                 room_id, body.vup, body.enabled,
-                record_video=body.record_video)
+                record_video=body.record_video, notify=body.notify,
+                overrides=body.overrides)
         except KeyError as e:
             raise HTTPException(status_code=404, detail=str(e))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        return {"room_id": t.room_id, "vup": t.vup, "enabled": t.enabled,
-                "record_video": t.record_video}
+        return _target_payload(t)
 
     @app.delete("/api/targets/{room_id}")
     async def delete_target(room_id: int):
@@ -143,31 +234,41 @@ def create_app() -> FastAPI:
             "started": started,
         }
 
-    # ---------------- B 站关注列表（需登录态） ----------------
+    # ---------------- B 站关注列表（需登录态，增量分页） ----------------
     @app.get("/api/followings")
-    async def list_followings():
+    async def list_followings(page: int = 1):
         sd = mgr().settings.effective_sessdata()
         if not sd.strip():
             raise HTTPException(
                 status_code=400,
                 detail="尚未配置 SESSDATA：关注列表属于账号私有数据，"
                        "游客模式无法读取，请先到「设置」页填写登录凭证")
+        if not 1 <= page <= following_mod.MAX_PAGE:
+            raise HTTPException(status_code=400, detail="页码非法")
         try:
-            items = await asyncio.to_thread(
-                following_mod.fetch_all_followed, sd)
+            data = await asyncio.to_thread(
+                following_mod.fetch_followed_page, sd, page)
         except following_mod.FollowingError as e:
-            raise HTTPException(
-                status_code=401 if e.code in (-101, -111) else 502,
-                detail=str(e))
+            if e.code == 400:
+                status = 400
+            elif e.code in (-101, -111):
+                status = 401
+            else:
+                status = 502
+            raise HTTPException(status_code=status, detail=str(e))
         existing = {t.room_id: t for t in mgr().target_store.targets}
         out = []
-        for it in items:
+        for it in data["items"]:
             t = existing.get(it["room_id"])
             out.append({**it, "added": t is not None,
                         "enabled": bool(t.enabled) if t else False})
         return {
-            "total": len(out),
-            "live_count": sum(1 for x in out if x["live_status"] == 1),
+            "page": data["page"],
+            "page_size": data["page_size"],
+            "total": data["total"],
+            "total_page": data["total_page"],
+            "live_count": data["live_count"],
+            "has_more": data["page"] < data["total_page"],
             "items": out,
         }
 
@@ -183,6 +284,33 @@ def create_app() -> FastAPI:
     async def stop_room(room_id: int):
         await mgr().stop_room(room_id)
         return {"ok": True}
+
+    @app.post("/api/rooms/{room_id}/open-folder")
+    async def open_room_folder(room_id: int):
+        """打开该房间当前弹幕文件所在目录（资源管理器中选中文件）。"""
+        m = mgr()
+        rt = m.runtimes.get(room_id)
+        if rt is None:
+            raise HTTPException(status_code=404, detail="房间不存在")
+        if not rt.current_file:
+            raise HTTPException(status_code=409,
+                                detail="该房间当前没有弹幕文件（真实开播后才会生成）")
+        base = m.settings.records_dir.resolve()
+        target = (base / rt.vup / rt.current_file).resolve()
+        # 防目录穿越：解析后必须仍位于 records 目录之内
+        if target != base and base not in target.parents:
+            raise HTTPException(status_code=400, detail="文件路径越界，拒绝打开")
+        if not target.exists():
+            # 极端竞态（文件名已分配但尚未落盘）：退回打开主播目录
+            target = target.parent
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="文件或目录尚未生成")
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, _reveal_in_os, target)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(status_code=500, detail=f"无法打开文件管理器：{e}")
+        return {"ok": True, "path": str(target)}
 
     @app.post("/api/start-all")
     async def start_all():
@@ -327,6 +455,14 @@ def create_app() -> FastAPI:
                 "font_scales": list(FONT_SCALES),
                 "widths": list(WIDTH_CHOICES),
                 "card_cols": list(CARD_COLS_CHOICES),
+                "orientations": [
+                    {"key": k, "label": ORIENTATION_META[k]["label"],
+                     "widths": list(ORIENTATION_META[k]["widths"]),
+                     "card_cols": list(ORIENTATION_META[k]["card_cols"]),
+                     "default_width": ORIENTATION_META[k]["default_width"],
+                     "default_card_cols": ORIENTATION_META[k]["default_card_cols"]}
+                    for k in ORIENTATIONS
+                ],
             },
         }
 
@@ -357,6 +493,24 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(e))
         return Response(content=png, media_type="image/png",
                         headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/danmaku-style")
+    async def get_danmaku_style():
+        st = ds_mod.get_store()
+        return {"style": st.style.public_dict(), "meta": ds_mod.style_meta()}
+
+    @app.put("/api/danmaku-style")
+    async def put_danmaku_style(body: dict):
+        try:
+            style = ds_mod.get_store().update(body)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"style": style.public_dict(), "meta": ds_mod.style_meta()}
+
+    @app.delete("/api/danmaku-style")
+    async def reset_danmaku_style():
+        style = ds_mod.get_store().reset()
+        return {"style": style.public_dict(), "meta": ds_mod.style_meta()}
 
     def _build_summary(rel: str, kind: str) -> dict:
         src = _safe_file(kind, rel)
@@ -401,7 +555,7 @@ def create_app() -> FastAPI:
     SESSION_BASE_RE = re.compile(r"^live_\d{8}_\d{4}$")
 
     def _vup_dir(vup: str) -> Path:
-        base = mgr().settings.video_dir.resolve()
+        base = mgr().settings.video_path().resolve()
         p = (base / vup).resolve()
         try:
             p.relative_to(base)
@@ -440,7 +594,16 @@ def create_app() -> FastAPI:
                 break
         return meta
 
-    def _enrich_ai_commands(vdir: Path, ai: dict) -> None:
+    def _session_ass_path(vdir: Path, meta: dict) -> Path | None:
+        """本场 ASS 弹幕字幕路径（meta 记录且文件存在才返回，否则 None）。"""
+        ass_name = meta.get("ass")
+        if not ass_name:
+            return None
+        p = vdir / str(ass_name)
+        return p if p.is_file() else None
+
+    def _enrich_ai_commands(vdir: Path, ai: dict,
+                            ass_path: Path | None = None) -> None:
         """给 C 档 AI 补漏窗口的 seek 注入播放器命令（rule 窗口走 highlights 接口）。"""
         ff = media_mod.find_ffmpeg()
         for w in ai.get("extra_windows", []):
@@ -449,7 +612,7 @@ def create_app() -> FastAPI:
                 part_path = vdir / seek["part"]
                 dur = max(1, seek["end_sec"] - seek["start_sec"])
                 seek["commands"] = media_mod.player_commands(
-                    ff, part_path, seek["start_sec"], dur)
+                    ff, part_path, seek["start_sec"], dur, ass_path)
         ai["ffmpeg_available"] = bool(ff)
 
     @app.get("/api/videos/ffmpeg")
@@ -460,7 +623,7 @@ def create_app() -> FastAPI:
     @app.get("/api/videos")
     async def list_videos():
         m = mgr()
-        root = m.settings.video_dir
+        root = m.settings.video_path()
         active = {rt.video_session: rt for rt in m.runtimes.values()
                   if rt.video_active and rt.video_session}
         targets = {t.room_id: t for t in m.target_store.targets}
@@ -499,6 +662,19 @@ def create_app() -> FastAPI:
                             try:
                                 clips.append({"file": cf.name,
                                               "size": cf.stat().st_size})
+                            except OSError:
+                                continue
+                    # 烧录弹幕版导出产物（手动触发的 .danmaku.mp4）；
+                    # 导出进行中不列出半成品（文件已在写但未完成）
+                    exports = []
+                    _exp_running = _export_jobs.get(
+                        f"{vdir.name}/{base}", {}).get("status") == "running"
+                    if base and not _exp_running:
+                        for ef in sorted(vdir.glob(f"{base}*.danmaku.mp4")):
+                            referenced.add(ef.name.lower())
+                            try:
+                                exports.append({"file": ef.name,
+                                                "size": ef.stat().st_size})
                             except OSError:
                                 continue
                     # AI 解读缓存（<base>.ai.json）
@@ -602,6 +778,10 @@ def create_app() -> FastAPI:
                             and (m.settings.records_dir / vdir.name
                                  / jsonl_name).is_file()),
                         "clips": clips,
+                        "exports": exports,
+                        "exporting": _export_jobs.get(f"{vdir.name}/{base}")
+                        if _export_jobs.get(f"{vdir.name}/{base}",
+                                            {}).get("status") == "running" else None,
                         "ai": ai_info,
                         "record_video": bool(
                             tgt.record_video if tgt else False),
@@ -623,6 +803,21 @@ def create_app() -> FastAPI:
         return {"dir": str(root), "ffmpeg": media_mod.find_ffmpeg(),
                 "sessions": sessions, "orphans": orphans}
 
+    @app.post("/api/videos/open-folder")
+    async def open_video_folder():
+        """在资源管理器中打开视频保存根目录。路径由服务端配置派生，不接受前端传参。"""
+        target = mgr().settings.video_path().resolve()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"视频目录无法创建：{e}")
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, _reveal_in_os, target)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise HTTPException(status_code=500, detail=f"无法打开文件管理器：{e}")
+        return {"ok": True, "path": str(target)}
+
     @app.get("/api/videos/highlights")
     async def video_highlights(vup: str, session: str,
                                window_sec: int = Query(60, ge=20, le=600),
@@ -641,24 +836,25 @@ def create_app() -> FastAPI:
         except (ValueError, OSError) as e:
             raise HTTPException(status_code=400, detail=str(e))
         ff = media_mod.find_ffmpeg()
+        ass_path = _session_ass_path(d, meta)
         for w in result.get("windows", []):
             seek = w.get("seek")
             if seek and seek.get("part"):
                 part_path = d / seek["part"]
                 dur = max(1, seek["end_sec"] - seek["start_sec"])
                 seek["commands"] = media_mod.player_commands(
-                    ff, part_path, seek["start_sec"], dur)
+                    ff, part_path, seek["start_sec"], dur, ass_path)
         result["ffmpeg"] = {"available": bool(ff), **(ff or {})}
         result["jsonl_exists"] = jsonl.exists()
         return result
 
     @app.get("/api/videos/ai-result")
     async def video_ai_result(vup: str, session: str):
-        d, _mf, _meta = _load_session_meta(vup, session)
+        d, _mf, meta = _load_session_meta(vup, session)
         ai = llm_mod.load_ai(d / f"{session}.ai.json")
         if not ai:
             raise HTTPException(status_code=404, detail="本场还没有 AI 解读结果")
-        _enrich_ai_commands(d, ai)
+        _enrich_ai_commands(d, ai, _session_ass_path(d, meta))
         return ai
 
     @app.post("/api/videos/ai-analyze")
@@ -697,8 +893,135 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(e))
         except llm_mod.LLMRuntimeError as e:
             raise HTTPException(status_code=502, detail=str(e))
-        _enrich_ai_commands(d, ai)
+        _enrich_ai_commands(d, ai, _session_ass_path(d, meta))
         return ai
+
+    @app.post("/api/videos/export-sub")
+    async def video_export_sub(body: VideoSessionIn):
+        """一键导出烧录弹幕版 MP4：用户显式手动触发，绝不默认烧录；原 FLV 不改动。
+
+        流程：确保 ASS 字幕（没有则现场从弹幕 jsonl 生成）→ 逐段后台烧录
+        （libx264 重编码 + 音频流拷贝），产物 <分段名>.danmaku.mp4；
+        多分段按段起始时间平移字幕时间轴。进行中场次拒绝导出。
+        """
+        d, mf, meta = _load_session_meta(body.vup, body.session)
+        key = f"{body.vup}/{body.session}"
+        if _export_jobs.get(key, {}).get("status") == "running":
+            raise HTTPException(status_code=409, detail="该场次正在导出中，请等待完成")
+        ff = media_mod.find_ffmpeg()
+        if not ff:
+            raise HTTPException(
+                status_code=400,
+                detail="未检测到 ffmpeg：请安装 ffmpeg 并加入 PATH 后重试")
+        if str(meta.get("base")) in {rt.video_session
+                                     for rt in mgr().runtimes.values()
+                                     if rt.video_active}:
+            raise HTTPException(status_code=409,
+                                detail="该场次正在录制中，请等下播后再导出")
+        # 1) 确保弹幕字幕：没有就现场生成
+        ass_path = _session_ass_path(d, meta)
+        if not ass_path:
+            jsonl = (mgr().settings.records_dir / body.vup
+                     / str(meta.get("jsonl") or ""))
+
+            def _gen() -> str | None:
+                name = vr_mod.generate_ass(jsonl, d / f"{body.session}.ass", meta)
+                if name:
+                    meta["ass"] = name
+                    vr_mod.write_meta(meta, mf)
+                return name
+
+            try:
+                name = await asyncio.to_thread(_gen)
+            except OSError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            if not name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="本场没有可生成弹幕字幕的数据（弹幕 jsonl 缺失或无弹幕）")
+            ass_path = d / f"{body.session}.ass"
+        # 2) 选段：meta 有效分段；meta 未收尾（硬杀残留）按前缀认回
+        t0 = float(meta.get("start_ts") or 0)
+        segs: list[dict] = []
+        for s in meta.get("segments", []):
+            fn = str(s.get("file") or "")
+            if s.get("discarded") or not fn or not (d / fn).is_file():
+                continue
+            st = s.get("start_ts")
+            et = s.get("end_ts")
+            segs.append({
+                "file": fn,
+                "offset": max(0.0, float(st) - t0) if st else 0.0,
+                "dur": float(et) - float(st) if (st and et
+                                                and float(et) > float(st)) else None,
+            })
+        if not segs and not meta.get("end_ts"):
+            for cand in sorted(d.glob(f"{body.session}*.flv")):
+                if ".clip_" in cand.name:
+                    continue
+                segs.append({"file": cand.name, "offset": 0.0, "dur": None})
+        if not segs:
+            raise HTTPException(status_code=404, detail="本场没有可导出的视频分段")
+
+        job = {"status": "running", "progress": 0, "done": 0,
+               "total": len(segs), "current": segs[0]["file"],
+               "outputs": [], "error": ""}
+        _export_jobs[key] = job
+
+        async def _run() -> None:
+            loop = asyncio.get_running_loop()
+            tmp_files: list[Path] = []
+            try:
+                for i, seg in enumerate(segs):
+                    job["current"] = seg["file"]
+                    src = d / seg["file"]
+                    dst = d / f"{src.stem}.danmaku.mp4"
+                    use_ass = ass_path
+                    if seg["offset"] > 0:
+                        # 多分段：按段起始偏移平移场次级字幕时间轴
+                        tf = Path(tempfile.gettempdir()) / (
+                            f"ldd_shift_{body.session}_{src.stem}.ass")
+                        tmp_files.append(tf)
+                        media_mod.shift_ass(ass_path, tf, seg["offset"])
+                        use_ass = tf
+                    # 未收尾场次时长未知（无 end_ts）：用 ffmpeg 解析真实时长，
+                    # 否则进度一直卡 0%
+                    dur = seg["dur"]
+                    if dur is None:
+                        dur = await loop.run_in_executor(
+                            None, media_mod.probe_duration, ff, src)
+
+                    def _cb(pct: float, _i=i, _n=len(segs)) -> None:
+                        job["progress"] = int((_i + max(0, pct) / 100)
+                                              / _n * 100)
+
+                    r = await loop.run_in_executor(
+                        None, media_mod.burn_subtitle, ff, src, use_ass, dst,
+                        dur, _cb)
+                    job["outputs"].append(r)
+                    job["done"] = i + 1
+                job["status"] = "done"
+                job["progress"] = 100
+                job["current"] = ""
+            except (RuntimeError, OSError) as e:
+                job["status"] = "error"
+                job["error"] = str(e)
+            finally:
+                for tf in tmp_files:
+                    try:
+                        tf.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+        asyncio.create_task(_run())
+        return {"ok": True, "status": "running", "segments": len(segs),
+                "outputs": [f"{(d / s['file']).stem}.danmaku.mp4" for s in segs]}
+
+    @app.get("/api/videos/export-sub")
+    async def video_export_sub_status(vup: str, session: str):
+        """查询导出任务状态：running(含进度) / done / error / none。"""
+        job = _export_jobs.get(f"{vup}/{session}")
+        return job if job else {"status": "none"}
 
     @app.post("/api/videos/cut")
     async def video_cut(body: VideoCutIn):
@@ -769,10 +1092,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="非法路径")
         if not p.is_file():
             raise HTTPException(status_code=404, detail="文件不存在")
-        if p.suffix.lower() not in (".flv", ".ass"):
+        if p.suffix.lower() not in (".flv", ".ass", ".mp4"):
             raise HTTPException(status_code=400,
-                                detail="仅允许下载 FLV / ASS 文件")
+                                detail="仅允许下载 FLV / ASS / MP4 文件")
         media_type = ("video/x-flv" if p.suffix.lower() == ".flv"
+                      else "video/mp4" if p.suffix.lower() == ".mp4"
                       else "text/plain; charset=utf-8")
         return FileResponse(p, filename=p.name, media_type=media_type)
 
@@ -784,6 +1108,9 @@ def create_app() -> FastAPI:
                 if rt.video_active}:
             raise HTTPException(status_code=409,
                                 detail="该场次正在录制中，不能删除")
+        if _export_jobs.get(f"{vup}/{session}", {}).get("status") == "running":
+            raise HTTPException(status_code=409,
+                                detail="该场次正在导出弹幕版，请等待完成后再删除")
         removed = []
         candidates = []
         for s in meta.get("segments", []):
@@ -798,6 +1125,7 @@ def create_app() -> FastAPI:
             candidates.append(d / f"{base}.ai.json")
             candidates.append(d / f"{base}.ai.json.tmp")
             candidates.extend(d.glob(f"{base}.clip_*.flv"))
+            candidates.extend(d.glob(f"{base}*.danmaku.mp4"))
             # 异常认回的分段（meta 未记录）
             if not meta.get("end_ts"):
                 for rf in d.glob(f"{base}*.flv"):

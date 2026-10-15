@@ -9,7 +9,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 # 打包成绿色版（PyInstaller 冻结）后：
@@ -31,15 +31,55 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 TARGETS_FILE = CONFIG_DIR / "targets.json"
 ENV_FILE = ROOT_DIR / ".env"
 
-_BOOL_FIELDS = ("record_gifts", "filter_pure_emoticon", "record_moderation",
+_BOOL_FIELDS = ("record_sc", "record_gifts", "filter_pure_emoticon",
+                "record_moderation",
                 "anonymize", "sanitize_text", "auto_start", "video_enabled",
                 "llm_auto_analyze")
 _INT_FIELDS = ("offline_poll_sec", "idle_stop_minutes",
                "video_qn", "video_min_free_gb")
 _STR_FIELDS = ("anon_salt", "data_dir", "records_subdir", "weak_subdir",
-               "video_subdir")
+               "video_subdir", "video_dir", "log_dir")
 # AI 配置字符串字段单独成组：不参与目录名校验，仅做存取
 _LLM_STR_FIELDS = ("llm_base_url", "llm_api_key", "llm_model", "llm_mode")
+
+# 房间级可覆盖项（Target 中同名字段为 None = 跟随全局默认）。
+# 单一配置链：设置页全局开关=新房间默认值，房间管理可逐间覆盖，不另设第二套配置。
+ROOM_BOOL_OVERRIDES = ("record_sc", "record_gifts", "record_moderation",
+                       "filter_pure_emoticon", "anonymize", "sanitize_text",
+                       "llm_auto_analyze")
+ROOM_INT_OVERRIDES = ("video_qn",)
+
+
+def coerce_room_overrides(raw: dict) -> dict:
+    """校验房间级覆盖项 patch。
+
+    - 布尔项仅接受 true/false/null（null=跟随全局）
+    - video_qn 仅接受 VIDEO_QN_CHOICES 内整数或 null
+    返回值可直接 setattr 到 Target。
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("房间覆盖配置必须是对象")
+    out: dict = {}
+    for k in ROOM_BOOL_OVERRIDES:
+        if k in raw:
+            v = raw[k]
+            if v is not None and not isinstance(v, bool):
+                raise ValueError(f"{k} 必须是 true / false 或 null（跟随全局）")
+            out[k] = v
+    if "video_qn" in raw:
+        v = raw["video_qn"]
+        if v is not None:
+            if isinstance(v, bool):
+                raise ValueError("视频画质档位无效")
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                raise ValueError("视频画质必须为允许的档位编号或 null（跟随全局）")
+            if v not in VIDEO_QN_CHOICES:
+                raise ValueError(
+                    f"画质档位无效，可选：{sorted(VIDEO_QN_CHOICES, reverse=True)}")
+        out["video_qn"] = v
+    return out
 
 # 可选画质档位（qn: B 站直播流清晰度编号）
 VIDEO_QN_CHOICES = (10000, 400, 250, 150, 80)
@@ -87,7 +127,13 @@ class Settings:
     records_subdir: str = "records"
     weak_subdir: str = "weak_label"
     video_subdir: str = "video"
+    # 视频独立保存目录：空串=跟随 数据目录/video_subdir；
+    # 非空=独立绝对路径（或相对运行目录的路径，支持 ~ 展开），视频体积大时可指向其他盘
+    video_dir: str = ""
+    # 运行日志目录：空串=数据目录下 logs/；非空=独立路径（支持 ~ 展开）
+    log_dir: str = ""
     # 录制开关
+    record_sc: bool = True               # SC（醒目留言）事件，默认录
     record_gifts: bool = False           # 礼物事件（默认不录，信息密度低）
     filter_pure_emoticon: bool = True    # 纯大表情弹幕不录（文字+表情保留）
     record_moderation: bool = True       # 房管拉黑/禁言弱标签回捞
@@ -122,9 +168,27 @@ class Settings:
     def weak_dir(self) -> Path:
         return self.data_path() / (self.weak_subdir.strip() or "weak_label")
 
-    @property
-    def video_dir(self) -> Path:
+    def video_path(self) -> Path:
+        """视频落盘根目录。
+
+        - video_dir 非空：独立目录（支持 ~ 展开），与弹幕数据目录解耦，可指向其他盘
+        - 为空：跟随 数据目录 / video_subdir（向后兼容）
+        """
+        custom = self.video_dir.strip()
+        if custom:
+            return Path(custom).expanduser()
         return self.data_path() / (self.video_subdir.strip() or "video")
+
+    def log_path(self) -> Path:
+        """运行日志落盘目录。
+
+        - log_dir 非空：独立目录（支持 ~ 展开），与数据目录解耦
+        - 为空：数据目录 / logs（向后兼容）
+        """
+        custom = self.log_dir.strip()
+        if custom:
+            return Path(custom).expanduser()
+        return self.data_path() / "logs"
 
     def effective_sessdata(self) -> str:
         """环境变量 SESSDATA 优先（兼容 .env / 系统环境变量用法）。"""
@@ -149,6 +213,8 @@ class Settings:
         d.pop("llm_api_key", None)
         d["llm_ready"] = self.llm_ready()
         d["data_dir_effective"] = str(self.data_path())
+        d["video_dir_effective"] = str(self.video_path())
+        d["log_dir_effective"] = str(self.log_path())
         return d
 
 
@@ -158,6 +224,16 @@ class Target:
     vup: str
     enabled: bool = True
     record_video: bool = False        # 该房间是否同时录制直播视频（默认关）
+    notify: bool = False              # 该房间开播时是否发送提醒（浏览器通知/邮件等通道）
+    # ---- 房间级覆盖（None=跟随设置页全局默认）----
+    record_sc: bool | None = None
+    record_gifts: bool | None = None
+    record_moderation: bool | None = None
+    filter_pure_emoticon: bool | None = None
+    anonymize: bool | None = None
+    sanitize_text: bool | None = None
+    video_qn: int | None = None
+    llm_auto_analyze: bool | None = None
     added_at: float = field(default_factory=lambda: time.time())
 
 
@@ -209,8 +285,12 @@ class SettingsStore:
         return s
 
     def update(self, patch: dict) -> Settings:
-        """合并校验更新。返回更新后的 settings。"""
-        s = self.settings
+        """合并校验更新。返回更新后的 settings。
+
+        在副本上修改并做完全部校验，通过后才提交：任何 ValueError 都不会污染
+        当前运行配置（旧实现原地改值、末尾才校验，失败会留下半截非法配置）。
+        """
+        s = replace(self.settings)
         for k in _BOOL_FIELDS:
             if k in patch:
                 setattr(s, k, bool(patch[k]))
@@ -233,6 +313,11 @@ class SettingsStore:
         for k in ("anon_salt", "data_dir"):
             if patch.get(k) is not None:
                 setattr(s, k, str(patch[k]).strip())
+        if patch.get("video_dir") is not None:
+            # 兼容粘贴带首尾引号的 Windows 路径
+            s.video_dir = str(patch["video_dir"]).strip().strip('"').strip()
+        if patch.get("log_dir") is not None:
+            s.log_dir = str(patch["log_dir"]).strip().strip('"').strip()
         for k in ("records_subdir", "weak_subdir", "video_subdir"):
             if patch.get(k) is not None:
                 v = str(patch[k]).strip().replace("\\", "/").strip("/")
@@ -262,20 +347,23 @@ class SettingsStore:
             s.llm_mode = m
         if s.llm_base_url and not re.match(r"^https?://", s.llm_base_url):
             raise ValueError("AI 接口地址必须以 http:// 或 https:// 开头")
-        # 输出目录合法性
-        p = s.data_path()
-        try:
-            p.mkdir(parents=True, exist_ok=True)
-            test_file = p / ".write_test"
-            test_file.write_text("x", encoding="utf-8")
-            test_file.unlink(missing_ok=True)
-        except OSError as e:
-            raise ValueError(f"数据目录不可写：{p}（{e}）")
+        # 输出目录合法性：数据目录 + 视频/日志自定义目录（可能指向别的盘，必须可创建/可写）
+        for label, p in (("数据目录", s.data_path()),
+                         ("视频保存目录", s.video_path()),
+                         ("日志保存目录", s.log_path())):
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+                test_file = p / ".write_test"
+                test_file.write_text("x", encoding="utf-8")
+                test_file.unlink(missing_ok=True)
+            except OSError as e:
+                raise ValueError(f"{label}不可写：{p}（{e}）")
         if s.offline_poll_sec < 10:
             s.offline_poll_sec = 10
         if s.video_qn not in VIDEO_QN_CHOICES:
             raise ValueError(f"画质档位无效，可选：{VIDEO_QN_CHOICES}")
         s.video_min_free_gb = min(max(s.video_min_free_gb, 1), 1000)
+        self.settings = s
         self.save()
         return s
 
@@ -329,13 +417,24 @@ class TargetStore:
         out: list[Target] = []
         for item in raw.get("targets", []):
             try:
-                out.append(Target(
+                t = Target(
                     room_id=int(item["room_id"]),
                     vup=str(item.get("vup") or f"room_{item['room_id']}").strip(),
                     enabled=bool(item.get("enabled", True)),
                     record_video=bool(item.get("record_video", False)),
+                    notify=bool(item.get("notify", False)),
                     added_at=float(item.get("added_at") or time.time()),
-                ))
+                )
+                # 覆盖项做宽容解析：缺失/类型错误一律视为「跟随全局」
+                for k in ROOM_BOOL_OVERRIDES:
+                    v = item.get(k)
+                    if isinstance(v, bool):
+                        setattr(t, k, v)
+                qn = item.get("video_qn")
+                if isinstance(qn, int) and not isinstance(qn, bool) \
+                        and qn in VIDEO_QN_CHOICES:
+                    t.video_qn = qn
+                out.append(t)
             except (KeyError, TypeError, ValueError):
                 continue
         return out
@@ -351,18 +450,19 @@ class TargetStore:
         return next((t for t in self.targets if t.room_id == room_id), None)
 
     def add(self, room_id: int, vup: str, enabled: bool = True,
-            record_video: bool = False) -> Target:
+            record_video: bool = False, notify: bool = False) -> Target:
         if self.get(room_id):
             raise ValueError(f"房间 {room_id} 已存在")
         t = Target(room_id=room_id, vup=vup or f"room_{room_id}",
-                   enabled=enabled, record_video=record_video)
+                   enabled=enabled, record_video=record_video, notify=notify)
         self.targets.append(t)
         self.save()
         return t
 
     def bulk_add(self, pairs: list[tuple[int, str]],
                  enabled: bool = True,
-                 record_video: bool = False
+                 record_video: bool = False,
+                 notify: bool = False
                  ) -> tuple[list[Target], list[int]]:
         """批量加入房间（单次落盘）。返回 (新增目标, 已存在被跳过的 room_id)。"""
         new: list[Target] = []
@@ -373,7 +473,8 @@ class TargetStore:
                 continue
             t = Target(room_id=room_id,
                        vup=(vup or "").strip() or f"room_{room_id}",
-                       enabled=enabled, record_video=record_video)
+                       enabled=enabled, record_video=record_video,
+                       notify=notify)
             self.targets.append(t)
             new.append(t)
         if new:
@@ -382,7 +483,9 @@ class TargetStore:
 
     def update(self, room_id: int, vup: str | None = None,
                enabled: bool | None = None,
-               record_video: bool | None = None) -> Target:
+               record_video: bool | None = None,
+               notify: bool | None = None,
+               overrides: dict | None = None) -> Target:
         t = self.get(room_id)
         if not t:
             raise KeyError(f"房间 {room_id} 不存在")
@@ -392,6 +495,12 @@ class TargetStore:
             t.enabled = bool(enabled)
         if record_video is not None:
             t.record_video = bool(record_video)
+        if notify is not None:
+            t.notify = bool(notify)
+        if overrides is not None:
+            clean = coerce_room_overrides(overrides)
+            for k, v in clean.items():
+                setattr(t, k, v)
         self.save()
         return t
 
