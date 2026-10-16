@@ -477,7 +477,7 @@ function roomCard(r) {
     </div>` : '';
 
   return `
-  <div class="room-card ${running ? 'recording' : ''}" data-room-id="${r.room_id}">
+  <div class="room-card ${r.running ? 'recording' : ''}" data-room-id="${r.room_id}">
     <div class="rc-head">
       <span class="badge ${cls}"${phaseTitle ? ` title="${phaseTitle}"` : ''}>${label}</span>
       <span class="rc-name" title="${fmt.esc(r.anchor_name || r.vup)}">${fmt.esc(r.anchor_name || r.vup)}</span>
