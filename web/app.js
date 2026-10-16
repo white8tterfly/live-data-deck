@@ -520,7 +520,7 @@ function syncRoomPulses() {
     if (!strip || strip.container !== container) {
       if (strip) strip.destroy();
       strip = new PulseStrip(container, {
-        data: norm, mode: 'static', color: 'var(--sig-level)',
+        data: norm, mode: 'static', color: 'var(--sig-recording)',
       });
       pulseStrips.set(id, strip);
     } else {

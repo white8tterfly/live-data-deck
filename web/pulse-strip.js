@@ -127,9 +127,18 @@
       return;
     }
 
-    /* 画基线 */
+    /* 画网格横线（3 等分，仪表刻度感） */
     ctx.strokeStyle = cssVar('--border-soft') || 'rgba(255,255,255,.1)';
     ctx.lineWidth = 1;
+    for (var gx = 1; gx < 3; gx++) {
+      var gy = Math.round(g.h * gx / 3) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(0, gy);
+      ctx.lineTo(g.w, gy);
+      ctx.stroke();
+    }
+
+    /* 画基线 */
     ctx.beginPath();
     ctx.moveTo(0, g.h - 0.5);
     ctx.lineTo(g.w, g.h - 0.5);
@@ -177,18 +186,34 @@
       ctx.stroke();
     }
 
-    this._updateSr(maxV);
+    /* 数字标注：右上角峰值、左下角当前值 */
+    var curV = data[data.length - 1];
+    ctx.font = '10px ' + (cssVar('--mono') || 'Consolas, monospace');
+    ctx.textBaseline = 'top';
+    /* 峰值（右上） */
+    ctx.fillStyle = color;
+    ctx.textAlign = 'right';
+    ctx.fillText('峰 ' + Math.round(maxV), g.w - 2, 1);
+    /* 当前值（左下） */
+    ctx.fillStyle = cssVar('--text-dim') || '#8a93a6';
+    ctx.textAlign = 'left';
+    ctx.fillText('今 ' + Math.round(curV), 2, g.h - 11);
+
+    this._updateSr(maxV, curV);
   };
 
-  PulseStrip.prototype._updateSr = function (maxV) {
+  PulseStrip.prototype._updateSr = function (maxV, curV) {
     if (maxV == null) {
       var data = this.data;
       maxV = 0;
       for (var i = 0; i < data.length; i++) if (data[i] > maxV) maxV = data[i];
     }
+    if (curV == null) curV = this.data[this.data.length - 1] || 0;
     var peak = Math.round(maxV);
+    var cur = Math.round(curV);
     this.sr.textContent = '近 ' + this.windowSeconds +
-      ' 秒信号：峰值 ' + peak + (this.events.length ? '，含 ' + this.events.length + ' 个事件标记' : '');
+      ' 秒信号：当前 ' + cur + '，峰值 ' + peak +
+      (this.events.length ? '，含 ' + this.events.length + ' 个事件标记' : '');
   };
 
   PulseStrip.prototype.setData = function (arr) {
