@@ -430,9 +430,9 @@ function roomCard(r) {
         ? '正在起录…' : '开播后自动起录');
     videoLine = `<div class="rc-video arm">🎥 视频待录 · ${armText}</div>`;
   } else {
-    // 占位标签：未开视频的卡片保留同一行，与「视频录制中」卡片底部统计行对齐
-    videoLine = `<div class="rc-video off">🎥 <b>视频未录制</b>
-      <span class="rc-video-sub">仅录制弹幕，可在房间设置中开启视频直录</span></div>`;
+    // 占位标签：未开视频的卡片保留同一行，与「视频录制中」卡片底部统计行对齐；
+    // 只留一行短文案，第二行说明会把下方统计行顶下去导致同行卡片不对齐（用户反馈）
+    videoLine = `<div class="rc-video off">🎥 <b>视频未录制</b></div>`;
   }
 
   const running = r.phase === 'recording';
