@@ -406,8 +406,9 @@ function roomCard(r) {
     if (r.retries) grid.push(item('重连', r.retries));
     grid.push(item('弹幕速率', `${r.rate_per_min} 条/分`));
     if (r.popularity_now) {
-      grid.push(item('人气', fmt.n(r.popularity_now)
-        + (r.popularity_peak ? `（峰 ${fmt.n(r.popularity_peak)}）` : '')));
+      const popVal = fmt.n(r.popularity_now)
+        + (r.popularity_peak ? `（峰 ${fmt.n(r.popularity_peak)}）` : '');
+      grid.push(item('人气', popVal, true));
     }
   }
   if (r.current_file) {
