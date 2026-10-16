@@ -511,7 +511,11 @@ body {
   transition: border-color .2s, transform .2s;
 }
 .room-card:hover { border-color: var(--border-hi); transform: translateY(-1px); }
-.room-card.recording { border-color: var(--sig-recording-border); animation: rc-rec-pulse 2.4s ease-in-out infinite; }
+.room-card.recording {
+  border-color: var(--sig-recording-border);
+  animation: rc-rec-pulse 2.4s ease-in-out infinite;
+  animation-delay: var(--rec-delay, 0s);
+}
 @keyframes rc-rec-pulse { 0%, 100% { border-color: var(--sig-recording-border); } 50% { border-color: var(--sig-recording); } }
 .rc-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .rc-name { font-weight: 650; font-size: 15px; flex: 1 1 auto; min-width: 0;
@@ -1874,6 +1878,9 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   height: 32px;
   margin-top: 8px;
   position: relative;
+  background: var(--bg-soft);
+  border-radius: 4px;
+  overflow: hidden;
 }
 .rc-pulse canvas {
   display: block;

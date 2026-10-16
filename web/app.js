@@ -477,8 +477,13 @@ function roomCard(r) {
       <div class="rc-stat"><b>${fmt.n(c.emoticon_skipped)}</b>纯表情过滤</div>
     </div>` : '';
 
+  // 基于 room_id 生成负延迟，避免 WS 更新重建 DOM 时呼吸动画从头开始
+  const recDelay = r.running
+    ? `style="--rec-delay:${-((Number(r.room_id) % 240) / 100).toFixed(2)}s"`
+    : '';
+
   return `
-  <div class="room-card ${r.running ? 'recording' : ''}" data-room-id="${r.room_id}">
+  <div class="room-card ${r.running ? 'recording' : ''}" data-room-id="${r.room_id}" ${recDelay}>
     <div class="rc-head">
       <span class="badge ${cls}"${phaseTitle ? ` title="${phaseTitle}"` : ''}>${label}</span>
       <span class="rc-name" title="${fmt.esc(r.anchor_name || r.vup)}">${fmt.esc(r.anchor_name || r.vup)}</span>
@@ -490,7 +495,7 @@ function roomCard(r) {
     ${r.last_error && !r.connected ? `<div class="rc-err">⚠ ${fmt.esc(r.last_error)}</div>` : ''}
     ${videoLine}
     ${stats}
-    ${running ? '<div class="rc-pulse" aria-hidden="true"></div>' : ''}
+    ${r.running ? '<div class="rc-pulse" aria-hidden="true"></div>' : ''}
     <div class="rc-foot">
       <a class="rc-enter" href="https://live.bilibili.com/${r.room_id}"
          target="_blank" rel="noopener" title="在 B 站新标签页打开该直播间">进直播间 ↗</a>
