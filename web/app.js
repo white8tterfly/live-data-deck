@@ -113,6 +113,7 @@ function showView(name) {
   if (name === 'analysis') initAnalysisView();
   if (name === 'logs') renderLogs(true);
   if (name === 'settings') { fillSettings(); loadCared(); loadTheme(); loadDs(); }
+  else stopDsPreview();   // 离开设置页：停掉弹幕预览定时器，避免在不可见面板中空转
 }
 
 /* 导航统一入口：设置页有未保存修改时先弹确认 */
@@ -2705,12 +2706,22 @@ const DS_SAMPLES = ['哈哈哈哈哈哈', '?', '6666', '主播好强', '这条�
 const DS_COLORS = ['#ff5c7c', '#30d7ff', '#42d392', '#f6c34b', '#ff8a00',
   '#ff69b4', '#8fc0ff'];
 
+/* ds 面板是否处于激活态：供 loadDs 判断是否需要补启预览定时器 */
+function dsPanelActive() {
+  const p = document.querySelector('.settings-tabpanel[data-panel="ds"]');
+  return !!(p && p.classList.contains('active'));
+}
+
 async function loadDs() {
-  if (dsData) return;  // 保存/恢复后本地即最新，整轮页面只拉一次
-  try { dsData = await api('/api/danmaku-style'); }
-  catch (err) { return; }
-  fillDs();
-  applyDsStatic();
+  if (!dsData) {   // 保存/恢复后本地即最新，整轮页面只拉一次
+    try { dsData = await api('/api/danmaku-style'); }
+    catch (err) { return; }
+    fillDs();
+    applyDsStatic();
+  }
+  /* 子标签被记忆为 ds 时，脚本加载期的 restoreSettingsTab 会在 dsData 就绪前调用
+     startDsPreview() 并直接返回；此处补启，否则滚动弹幕的定时器永远不会启动 */
+  if (dsPanelActive()) startDsPreview();
 }
 
 function dsFillSelect(sel, items, val) {
