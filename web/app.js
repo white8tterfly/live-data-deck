@@ -508,14 +508,6 @@ function roomCard(r) {
   </div>`;
 }
 
-function roomGroup(dotCls, title, rooms) {
-  return `<div class="room-group ${dotCls}">
-    <div class="rg-head"><i class="rg-dot ${dotCls}"></i>${title}
-      <span class="rg-count">${rooms.length}</span></div>
-    <div class="room-grid">${rooms.map(roomCard).join('')}</div>
-  </div>`;
-}
-
 /* C01 脉冲条实例池与数据窗：按房间 id 复用，避免 WS 增量重渲染时重复创建 */
 const pulseStrips = new Map();      // roomId → PulseStrip
 const pulseHistory = new Map();     // roomId → number[]（弹幕计数滑动窗）
@@ -556,17 +548,75 @@ function syncRoomPulses() {
   }
 }
 
+/* 房间卡显示签名：影响卡片内容的关键字段拼接，用于增量 diff */
+function roomSig(r) {
+  const c = r.counters || {};
+  return [
+    r.phase, r.running, r.connected, r.live_status,
+    r.anchor_name || r.vup, r.room_id, r.title,
+    r.current_file, r.host_index, r.host_count, r.retries,
+    r.rate_per_min, r.popularity_now, r.popularity_peak,
+    r.uptime_sec, r.last_error, r.video_active, r.record_video, r.notify,
+    c.danmaku, c.super_chat, c.gift, c.emoticon_skipped,
+  ].join('|');
+}
+
 function renderRoomGrid() {
   const grid = $('#roomGrid');
   const empty = $('#dashboardEmpty');
   if (!state.rooms.length) { grid.innerHTML = ''; empty.hidden = false; syncRoomPulses(); return; }
   empty.hidden = true;
+
   // 直播中在前、未开播/未运行在后；组内保持原有顺序
   const live = state.rooms.filter((r) => r.phase === 'recording');
   const idle = state.rooms.filter((r) => r.phase !== 'recording');
-  grid.innerHTML =
-    (live.length ? roomGroup('live', '直播中', live) : '')
-    + (idle.length ? roomGroup('idle', '未开播', idle) : '');
+
+  // 增量更新：按 room_id 复用已有卡片 DOM，签名相同则跳过重建
+  // 避免 5s state 推送时全量重建导致脉冲条闪烁、呼吸动画打断
+  const groups = [
+    { key: 'live', label: '直播中', rooms: live },
+    { key: 'idle', label: '未开播', rooms: idle },
+  ].filter((g) => g.rooms.length);
+
+  // 收集现有卡片，按 room_id 索引
+  const existing = new Map();
+  grid.querySelectorAll('.room-card[data-room-id]').forEach((el) => {
+    existing.set(el.dataset.roomId, el);
+  });
+
+  const frag = document.createDocumentFragment();
+  groups.forEach((g) => {
+    const heading = document.createElement('div');
+    heading.className = 'room-group';
+    heading.dataset.group = g.key;
+    const h = document.createElement('div');
+    h.className = 'rg-head';
+    h.innerHTML = `<i class="rg-dot ${g.key}"></i>${g.label}`
+      + `<span class="rg-count">${g.rooms.length}</span>`;
+    heading.appendChild(h);
+    const body = document.createElement('div');
+    body.className = 'room-grid';
+    g.rooms.forEach((r) => {
+      const sig = roomSig(r);
+      let card = existing.get(String(r.room_id));
+      if (card && card.dataset.sig === sig) {
+        // 数据未变，直接复用
+      } else {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = roomCard(r);
+        card = tmp.firstElementChild;
+      }
+      if (card) {
+        card.dataset.sig = sig;
+        body.appendChild(card);
+      }
+    });
+    heading.appendChild(body);
+    frag.appendChild(heading);
+  });
+
+  grid.innerHTML = '';
+  grid.appendChild(frag);
   syncRoomPulses();
 }
 
