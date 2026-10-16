@@ -439,7 +439,7 @@ function roomCard(r) {
   const showStats = running || c.danmaku || c.super_chat || c.gift
     || c.emoticon_skipped;
 
-  // 未开播：信息少，压成单行紧凑卡
+  // 未开播：单行紧凑卡
   if (!running) {
     const errIcon = r.last_error && !r.connected
       ? `<span class="rc-warn" title="${fmt.esc(r.last_error)}">⚠</span>` : '';
@@ -449,11 +449,12 @@ function roomCard(r) {
       : '';
     const bellIcon = r.notify
       ? '<span class="rc-nflag" title="已订阅开播提醒（开播时弹系统通知）">🔔</span>' : '';
+    const displayName = (r.anchor_name || r.vup) + (r.title ? ` · ${r.title}` : '');
     return `
   <div class="room-card compact ${cls}">
     <span class="badge ${cls}"${phaseTitle ? ` title="${phaseTitle}"` : ''}>${label}</span>
     <span class="rc-id">
-      <span class="rc-name" title="${fmt.esc(r.anchor_name || r.vup)}">${fmt.esc(r.anchor_name || r.vup)}</span>
+      <span class="rc-name" title="${fmt.esc(displayName)}">${fmt.esc(r.anchor_name || r.vup)}</span>
       <span class="rc-room">${r.room_id}</span>
     </span>
     <span class="rc-acts">${errIcon}${armIcon}${bellIcon}
@@ -465,7 +466,6 @@ function roomCard(r) {
         : `<button class="btn btn-sm btn-primary" data-start="${r.room_id}"
              title="开始该房间的弹幕录制；视频按🎥勾选联动">开始</button>`}
     </span>
-    <span class="rc-title" title="${fmt.esc(r.title)}">${fmt.esc(r.title || '')}</span>
   </div>`;
   }
 

@@ -597,7 +597,7 @@ a.rc-room:hover { color: var(--primary-hi); text-decoration: underline;
 .pathlink:hover { color: var(--primary-hi); text-decoration: underline;
                   text-underline-offset: 3px; }
 
-/* 未开播紧凑卡：grid 两行——首行 徽标|名称房号|操作区，次行整条标题 */
+/* 未开播紧凑卡：单行——徽标 | 名称房号 | 操作区 */
 .room-card.compact {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -613,6 +613,7 @@ a.rc-room:hover { color: var(--primary-hi); text-decoration: underline;
 }
 .compact .rc-name {
   font-size: 13px; flex: 0 1 auto; min-width: 2.5em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .compact .rc-room { font-size: 11px; flex: none; }
 /* 操作区整体不换行 */
@@ -620,12 +621,7 @@ a.rc-room:hover { color: var(--primary-hi); text-decoration: underline;
   display: flex; align-items: center; gap: 4px;
   flex: none; white-space: nowrap;
 }
-/* 标题独占第二行，吃满卡片宽度后省略 */
-.compact .rc-title {
-  grid-column: 1 / -1;
-  font-size: 12px; min-width: 0;
-}
-/* 紧凑卡的「进直播间」收为图标按钮，省出宽度给名称/标题 */
+/* 紧凑卡的「进直播间」收为图标按钮，省出宽度给名称 */
 .compact .rc-ico-link {
   width: 24px; height: 24px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
