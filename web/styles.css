@@ -62,6 +62,12 @@
   --sig-blocked: var(--warn);      /* 阻断 */
   --sig-peak: var(--sc);           /* 峰值金（SC） */
   --sig-alert: #ff9a3c;            /* 告警琥珀 */
+  --sig-recording-lo: rgba(255, 92, 124, .13);
+  --sig-recording-border: rgba(255, 92, 124, .42);
+  --sig-blocked-lo: rgba(247, 185, 85, .13);
+  --sig-danger-lo: rgba(239, 95, 108, .14);
+  --sig-level-lo: rgba(57, 213, 155, .13);
+  --sig-armed-lo: rgba(91, 157, 255, .13);
 
   /* ============ C01 动效尺度 ============ */
   --ease-out: cubic-bezier(.16, 1, .3, 1);
@@ -125,6 +131,12 @@
 
   /* C01 信号色：日间仅告警琥珀需单独覆盖，其余别名自动跟随既有变量 */
   --sig-alert: #e67e00;
+  --sig-recording-lo: rgba(239, 64, 96, .1);
+  --sig-recording-border: rgba(239, 64, 96, .4);
+  --sig-blocked-lo: rgba(189, 130, 10, .12);
+  --sig-danger-lo: rgba(229, 72, 77, .12);
+  --sig-level-lo: rgba(15, 159, 114, .12);
+  --sig-armed-lo: rgba(43, 124, 233, .12);
 }
 
 /* 无显式主题（内联脚本被拦截时）：跟随操作系统的浅色偏好 */
@@ -262,6 +274,7 @@ body {
 .nav-item.active::before {
   content: ""; position: absolute; left: -12px; top: 7px; bottom: 7px;
   width: 3px; border-radius: 2px; background: var(--primary);
+  box-shadow: 0 0 6px var(--primary);
 }
 .nav-badge {
   margin-left: auto; font-style: normal; font-size: 11px;
@@ -317,7 +330,7 @@ body {
   font-size: 12.5px; color: var(--text-2);
 }
 .global-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
-.global-pill.live { background: rgba(255, 92, 124, .1); border-color: rgba(255, 92, 124, .35); color: var(--live-hi); }
+.global-pill.live { background: var(--sig-recording-lo); border-color: var(--sig-recording-border); color: var(--live-hi); }
 .global-pill.live .dot { background: var(--live); box-shadow: 0 0 8px var(--live); animation: pulse 1.6s infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
 
@@ -437,8 +450,10 @@ body {
   border-radius: var(--radius); padding: 16px 18px;
 }
 .stat-label { font-size: 12.5px; color: var(--text-3); margin-bottom: 7px; }
-.stat-value { font-size: 28px; font-weight: 750; letter-spacing: .5px; }
+.stat-value { font-size: 28px; font-weight: 750; letter-spacing: .5px; transition: color var(--dur) var(--ease-out); }
 .stat-value small { font-size: 13px; font-weight: 500; color: var(--text-3); }
+.stat-value.flash { animation: stat-flash .5s var(--ease-out); }
+@keyframes stat-flash { 0% { color: var(--sig-level); } }
 .stat-foot { font-size: 12px; color: var(--text-3); margin-top: 5px; }
 .stat-foot span { color: var(--text-2); }
 
@@ -461,7 +476,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .rg-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
-.rg-dot.live { background: var(--live); box-shadow: 0 0 0 3px rgba(255, 92, 124, .18); }
+.rg-dot.live { background: var(--live); box-shadow: 0 0 0 3px var(--sig-recording-lo); }
 /* 未开播组：紧凑单行卡，排布更密 */
 .room-group.idle .room-grid {
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -474,7 +489,8 @@ body {
   transition: border-color .2s, transform .2s;
 }
 .room-card:hover { border-color: var(--border-hi); transform: translateY(-1px); }
-.room-card.recording { border-color: rgba(255, 92, 124, .4); }
+.room-card.recording { border-color: var(--sig-recording-border); animation: rc-rec-pulse 2.4s ease-in-out infinite; }
+@keyframes rc-rec-pulse { 0%, 100% { border-color: var(--sig-recording-border); } 50% { border-color: var(--sig-recording); } }
 .rc-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .rc-name { font-weight: 650; font-size: 15px; flex: 1 1 auto; min-width: 0;
            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -600,12 +616,12 @@ a.rc-room:hover { color: var(--primary-hi); text-decoration: underline;
   font-weight: 600; flex-shrink: 0; white-space: nowrap;
 }
 .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.badge.recording { background: rgba(255, 92, 124, .13); color: var(--live-hi); }
+.badge.recording { background: var(--sig-recording-lo); color: var(--live-hi); }
 .badge.recording::before { animation: pulse 1.6s infinite; }
-.badge.connecting { background: rgba(247, 185, 85, .13); color: var(--warn); }
+.badge.connecting { background: var(--sig-blocked-lo); color: var(--warn); }
 .badge.waiting { background: var(--panel-2); color: var(--text-3); }
 .badge.stopped { background: rgba(107, 116, 136, .15); color: var(--text-3); }
-.badge.error { background: rgba(239, 95, 108, .14); color: var(--danger-hi); }
+.badge.error { background: var(--sig-danger-lo); color: var(--danger-hi); }
 
 /* ============ 面板 / 表格 ============ */
 .panel {

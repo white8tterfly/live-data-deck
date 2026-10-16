@@ -357,14 +357,20 @@ const PHASE_TITLES = {
 const QN_LABELS = { 10000: '原画', 400: '蓝光', 250: '超清', 150: '高清', 80: '流畅' };
 
 function renderStats(s) {
-  $('#statRunning').textContent = fmt.n(s.running_count);
-  $('#statLive').textContent = fmt.n(s.live_count);
-  $('#statVideoRooms').textContent = fmt.n(s.video_active_count || 0);
-  $('#statConnected').textContent = fmt.n(s.connected_count);
-  $('#statDanmaku').textContent = fmt.n(state.totals.danmaku);
-  $('#statSC').textContent = fmt.n(state.totals.super_chat);
-  $('#statMod').textContent = fmt.n(state.totals.moderation);
-  $('#statRate').textContent = fmt.n(s.rate_per_min);
+  const flash = (el, val) => {
+    el.textContent = fmt.n(val);
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  };
+  flash($('#statRunning'), s.running_count);
+  flash($('#statLive'), s.live_count);
+  flash($('#statVideoRooms'), s.video_active_count || 0);
+  flash($('#statConnected'), s.connected_count);
+  flash($('#statDanmaku'), state.totals.danmaku);
+  flash($('#statSC'), state.totals.super_chat);
+  flash($('#statMod'), state.totals.moderation);
+  flash($('#statRate'), s.rate_per_min);
   const pill = $('#globalPill');
   const videoN = s.video_active_count || 0;
   if (s.recording) {

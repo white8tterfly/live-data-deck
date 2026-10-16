@@ -173,6 +173,17 @@
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    /* 末端发光圆点（实时感） */
+    var lastX = (n - 1) * stepX;
+    var lastY = g.h - (data[n - 1] / maxV) * (g.h - 4) - 2;
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
     /* 事件标记（竖向尖峰） */
     for (var e = 0; e < this.events.length; e++) {
       var ev = this.events[e];
