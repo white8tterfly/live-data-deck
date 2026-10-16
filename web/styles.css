@@ -225,7 +225,29 @@ body {
   border-right: 1px solid var(--border-soft);
   display: flex; flex-direction: column;
   padding: 18px 12px 14px;
+  position: relative;
+  transition: width var(--dur) var(--ease-out), padding var(--dur) var(--ease-out);
 }
+/* 侧栏边缘切换按钮（GitLab 风格） */
+.sidebar-toggle {
+  position: absolute;
+  top: 50%;
+  right: -11px;
+  transform: translateY(-50%);
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border-hi);
+  background: var(--panel);
+  color: var(--text-3);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10;
+  transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur) var(--ease-out);
+  padding: 0;
+}
+.sidebar-toggle:hover { background: var(--panel-hi); color: var(--primary-hi); }
+.sidebar-collapsed .sidebar-toggle { transform: translateY(-50%) rotate(180deg); }
+.sidebar-collapsed .sidebar-toggle:hover { color: var(--primary-hi); }
 .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 18px; }
 .brand-logo {
   position: relative;
@@ -1904,8 +1926,11 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   border-right: none;
   overflow: hidden;
 }
-.sidebar-collapsed .sidebar > * {
+.sidebar-collapsed .sidebar > *:not(.sidebar-toggle) {
   visibility: hidden;
+}
+.sidebar-collapsed .sidebar-toggle {
+  right: -11px;
 }
 .sidebar-collapsed .main {
   margin-left: 0;
