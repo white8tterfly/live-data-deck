@@ -587,7 +587,7 @@ function renderRoomGrid() {
   const frag = document.createDocumentFragment();
   groups.forEach((g) => {
     const heading = document.createElement('div');
-    heading.className = 'room-group';
+    heading.className = `room-group ${g.key}`;
     heading.dataset.group = g.key;
     const h = document.createElement('div');
     h.className = 'rg-head';
