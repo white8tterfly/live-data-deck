@@ -505,8 +505,7 @@ function syncRoomPulses() {
     aliveIds.add(id);
     const room = state.rooms.find((r) => String(r.room_id) === String(id));
     if (!room) return;
-    const c = room.counters || {};
-    const val = Number(c.danmaku) || 0;
+    const val = Number(room.rate_per_min) || 0;
     let hist = pulseHistory.get(id) || [];
     hist.push(val);
     if (hist.length > PULSE_WINDOW) hist = hist.slice(-PULSE_WINDOW);
