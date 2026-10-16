@@ -80,7 +80,7 @@ function setTheme(theme) {
   });
 })();
 
-/* ---------------- C01 全屏监控模式（#monitor） ---------------- */
+/* ---------------- C01 全屏监控模式（#monitor，供 C03 复用） ---------------- */
 function enterMonitor() {
   document.body.classList.add('monitor-mode');
   stopDsPreview();
@@ -95,8 +95,6 @@ function exitMonitor() {
   }
 }
 (function initMonitorMode() {
-  const btn = $('#btnMonitor');
-  if (btn) btn.addEventListener('click', enterMonitor);
   /* 浏览器前进 / 后退：hash 变化同步 monitor 态 */
   window.addEventListener('hashchange', () => {
     if (location.hash === '#monitor') enterMonitor();
@@ -110,6 +108,20 @@ function exitMonitor() {
   });
   /* 页面加载时若 hash 为 #monitor，自动进入 */
   if (location.hash === '#monitor') enterMonitor();
+})();
+
+/* ---------------- 侧栏收缩 ---------------- */
+function toggleSidebar() {
+  const collapsed = document.body.classList.toggle('sidebar-collapsed');
+  localStorage.setItem('ldd-sidebar-collapsed', collapsed ? '1' : '0');
+}
+(function initSidebarToggle() {
+  const btn = $('#btnSidebarToggle');
+  if (btn) btn.addEventListener('click', toggleSidebar);
+  /* 恢复上次状态 */
+  if (localStorage.getItem('ldd-sidebar-collapsed') === '1') {
+    document.body.classList.add('sidebar-collapsed');
+  }
 })();
 
 async function api(path, opts = {}) {
