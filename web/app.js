@@ -439,8 +439,8 @@ function roomCard(r) {
   const showStats = running || c.danmaku || c.super_chat || c.gift
     || c.emoticon_skipped;
 
-  // 未开播：单行紧凑卡
-  if (!running) {
+  // 未录制（含未开播 + 直播中但未点开始）：单行紧凑卡
+  if (!r.running) {
     const errIcon = r.last_error && !r.connected
       ? `<span class="rc-warn" title="${fmt.esc(r.last_error)}">⚠</span>` : '';
     const armIcon = r.record_video
