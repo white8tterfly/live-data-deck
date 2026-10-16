@@ -80,6 +80,38 @@ function setTheme(theme) {
   });
 })();
 
+/* ---------------- C01 全屏监控模式（#monitor） ---------------- */
+function enterMonitor() {
+  document.body.classList.add('monitor-mode');
+  stopDsPreview();
+  if (location.hash !== '#monitor') {
+    history.replaceState(null, '', '#monitor');
+  }
+}
+function exitMonitor() {
+  document.body.classList.remove('monitor-mode');
+  if (location.hash === '#monitor') {
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
+(function initMonitorMode() {
+  const btn = $('#btnMonitor');
+  if (btn) btn.addEventListener('click', enterMonitor);
+  /* 浏览器前进 / 后退：hash 变化同步 monitor 态 */
+  window.addEventListener('hashchange', () => {
+    if (location.hash === '#monitor') enterMonitor();
+    else exitMonitor();
+  });
+  /* ESC 退出（仅在 monitor 模式下响应，不与其他 ESC 监听冲突） */
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('monitor-mode')) {
+      exitMonitor();
+    }
+  });
+  /* 页面加载时若 hash 为 #monitor，自动进入 */
+  if (location.hash === '#monitor') enterMonitor();
+})();
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -427,7 +459,7 @@ function roomCard(r) {
     </div>` : '';
 
   return `
-  <div class="room-card ${running ? 'recording' : ''}">
+  <div class="room-card ${running ? 'recording' : ''}" data-room-id="${r.room_id}">
     <div class="rc-head">
       <span class="badge ${cls}"${phaseTitle ? ` title="${phaseTitle}"` : ''}>${label}</span>
       <span class="rc-name" title="${fmt.esc(r.anchor_name || r.vup)}">${fmt.esc(r.anchor_name || r.vup)}</span>
@@ -439,6 +471,7 @@ function roomCard(r) {
     ${r.last_error && !r.connected ? `<div class="rc-err">⚠ ${fmt.esc(r.last_error)}</div>` : ''}
     ${videoLine}
     ${stats}
+    ${running ? '<div class="rc-pulse" aria-hidden="true"></div>' : ''}
     <div class="rc-foot">
       <a class="rc-enter" href="https://live.bilibili.com/${r.room_id}"
          target="_blank" rel="noopener" title="在 B 站新标签页打开该直播间">进直播间 ↗</a>
@@ -459,10 +492,51 @@ function roomGroup(dotCls, title, rooms) {
   </div>`;
 }
 
+/* C01 脉冲条实例池与数据窗：按房间 id 复用，避免 WS 增量重渲染时重复创建 */
+const pulseStrips = new Map();      // roomId → PulseStrip
+const pulseHistory = new Map();     // roomId → number[]（弹幕计数滑动窗）
+const PULSE_WINDOW = 60;
+
+function syncRoomPulses() {
+  const cards = $$('#roomGrid .room-card.recording[data-room-id]');
+  const aliveIds = new Set();
+  cards.forEach((card) => {
+    const id = card.dataset.roomId;
+    aliveIds.add(id);
+    const room = state.rooms.find((r) => String(r.room_id) === String(id));
+    if (!room) return;
+    const c = room.counters || {};
+    const val = Number(c.danmaku) || 0;
+    let hist = pulseHistory.get(id) || [];
+    hist.push(val);
+    if (hist.length > PULSE_WINDOW) hist = hist.slice(-PULSE_WINDOW);
+    pulseHistory.set(id, hist);
+    /* 归一化到 [0,1]：除以历史最大值，至少 1 防除零 */
+    const maxV = Math.max(1, ...hist);
+    const norm = hist.map((v) => v / maxV);
+    let strip = pulseStrips.get(id);
+    const container = card.querySelector('.rc-pulse');
+    if (!container) return;
+    if (!strip || strip.container !== container) {
+      if (strip) strip.destroy();
+      strip = new PulseStrip(container, {
+        data: norm, mode: 'static', color: 'var(--sig-level)',
+      });
+      pulseStrips.set(id, strip);
+    } else {
+      strip.setData(norm);
+    }
+  });
+  /* 销毁已离开 DOM 的实例 */
+  for (const [id, strip] of pulseStrips) {
+    if (!aliveIds.has(id)) { strip.destroy(); pulseStrips.delete(id); pulseHistory.delete(id); }
+  }
+}
+
 function renderRoomGrid() {
   const grid = $('#roomGrid');
   const empty = $('#dashboardEmpty');
-  if (!state.rooms.length) { grid.innerHTML = ''; empty.hidden = false; return; }
+  if (!state.rooms.length) { grid.innerHTML = ''; empty.hidden = false; syncRoomPulses(); return; }
   empty.hidden = true;
   // 直播中在前、未开播/未运行在后；组内保持原有顺序
   const live = state.rooms.filter((r) => r.phase === 'recording');
@@ -470,6 +544,7 @@ function renderRoomGrid() {
   grid.innerHTML =
     (live.length ? roomGroup('live', '直播中', live) : '')
     + (idle.length ? roomGroup('idle', '未开播', idle) : '');
+  syncRoomPulses();
 }
 
 $('#roomGrid').addEventListener('click', async (e) => {

@@ -54,6 +54,20 @@
   --guide-bg: rgba(91, 157, 255, .09);
   --guide-border: rgba(91, 157, 255, .38);
   --guide-sep: rgba(91, 157, 255, .3);
+
+  /* ============ C01 信号色语义层（别名映射既有变量，避免双份维护） ============ */
+  --sig-level: var(--ok);          /* 电平 / 正常 */
+  --sig-recording: var(--live);    /* 录制中 */
+  --sig-armed: var(--info);        /* 待录 */
+  --sig-blocked: var(--warn);      /* 阻断 */
+  --sig-peak: var(--sc);           /* 峰值金（SC） */
+  --sig-alert: #ff9a3c;            /* 告警琥珀 */
+
+  /* ============ C01 动效尺度 ============ */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --dur-fast: 160ms;
+  --dur: 240ms;
+  --dur-slow: 400ms;
 }
 
 /* ============ 日间主题 ============
@@ -108,6 +122,9 @@
   --guide-bg: rgba(43, 124, 233, .07);
   --guide-border: rgba(43, 124, 233, .35);
   --guide-sep: rgba(43, 124, 233, .28);
+
+  /* C01 信号色：日间仅告警琥珀需单独覆盖，其余别名自动跟随既有变量 */
+  --sig-alert: #e67e00;
 }
 
 /* 无显式主题（内联脚本被拦截时）：跟随操作系统的浅色偏好 */
@@ -160,6 +177,8 @@
     --guide-bg: rgba(43, 124, 233, .07);
     --guide-border: rgba(43, 124, 233, .35);
     --guide-sep: rgba(43, 124, 233, .28);
+    /* C01 信号色兜底：无 data-theme 且系统浅色时 */
+    --sig-alert: #e67e00;
   }
 }
 
@@ -1789,4 +1808,85 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   .settings-grid { grid-template-columns: 1fr; }
   .hl-bars { height: 90px; }
   .hl-bar { min-width: 1px; }
+}
+
+/* ============ C01 信号仪表台设计语言 ============ */
+
+/* 仪表数字：等宽数字，跳动时不抖宽 */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* sr-only：可访问性文本摘要（读屏可见，视觉隐藏） */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 房间卡脉冲条容器 */
+.rc-pulse {
+  width: 100%;
+  height: 32px;
+  margin-top: 8px;
+  position: relative;
+}
+.rc-pulse canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 细线扫描加载态（替代旋转 emoji） */
+@keyframes scan-line {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.scan-loader {
+  position: relative;
+  height: 2px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.scan-loader::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 40%; height: 100%;
+  background: linear-gradient(90deg, transparent, var(--sig-level), transparent);
+  animation: scan-line 1.2s var(--ease-out) infinite;
+}
+
+/* ============ 全屏监控模式（#monitor） ============ */
+.monitor-mode .sidebar,
+.monitor-mode .topbar h1,
+.monitor-mode .topbar-right {
+  display: none;
+}
+.monitor-mode .main {
+  margin: 0;
+  padding: 0;
+}
+.monitor-mode .topbar {
+  background: transparent;
+  border-bottom: none;
+}
+.monitor-mode .view.active {
+  height: 100vh;
+  overflow: auto;
+}
+
+/* ============ reduced-motion 全站降级 ============ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .scan-loader::after { animation: none; }
 }
