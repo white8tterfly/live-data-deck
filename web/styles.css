@@ -1928,13 +1928,17 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   width: 0;
   padding: 0;
   border-right: none;
-  /* 不用 overflow:hidden，否则收缩后切换按钮被裁掉无法点击展开 */
+  /* 禁止加 overflow:hidden——收缩后侧栏盒宽为 0，会把定位在边缘外侧的切换按钮
+     整块裁掉，导致无法点击展开；子元素改用 visibility:hidden 隐藏 */
 }
 .sidebar-collapsed .sidebar > *:not(.sidebar-toggle) {
   visibility: hidden;
 }
 .sidebar-collapsed .sidebar-toggle {
-  right: -11px;
+  /* 收缩后侧栏盒宽为 0，right:-11px 会把按钮一半推到视口外；
+     改贴视口左缘完整露出，正好落在内容区 24px 左边距的空白处 */
+  left: 0;
+  right: auto;
 }
 .sidebar-collapsed .main {
   margin-left: 0;
