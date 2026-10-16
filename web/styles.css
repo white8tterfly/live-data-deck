@@ -1928,7 +1928,7 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
   width: 0;
   padding: 0;
   border-right: none;
-  overflow: hidden;
+  /* 不用 overflow:hidden，否则收缩后切换按钮被裁掉无法点击展开 */
 }
 .sidebar-collapsed .sidebar > *:not(.sidebar-toggle) {
   visibility: hidden;
