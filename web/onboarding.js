@@ -12,7 +12,8 @@
      fallback=目标不可见时的回退选择器，
      tab=设置页子标签（进入该步时切换，使目标面板可见），
      filesTab=录制文件页签（records / weak / videos，进入该步时切换），
-     enter=进入该步时主动触发的动作（hl=打开高能弹窗，ana=跑一次演示分析）。
+     enter=进入该步时主动触发的动作（hl=打开高能弹窗，ana=跑一次演示分析），
+     keepHl=该步是弹窗内的一步，换步时不收起已打开的高能弹窗（弹窗里连续多步共用同一个弹窗）。
      正文 text 为 HTML：用 <ol><li> 分条，重点词用 .tour-kw 着色、.tour-chip 加底、<b> 提亮 */
   const STEPS = [
     { view: 'dashboard', target: '#view-dashboard .stat-grid',
@@ -90,21 +91,57 @@
         + '<li>用途：方便回看<span class="tour-kw">处理依据</span>。</li>'
         + '<li>平时这里通常是<span class="tour-kw">空的</span>，只有真发生过房管操作才有文件。</li>'
         + '</ol>' },
-    { view: 'files', filesTab: 'videos', target: '#videosTable', fallback: '#filesPanelVideos',
+    { view: 'files', filesTab: 'videos',
+      targets: ['#filesPanelVideos .video-toolbar', '#filesPanelVideos thead'], fallback: '#filesPanelVideos',
       title: '录制文件 · 视频录制',
       text: '<ol>'
-        + '<li>按场次列出录下的视频：每行显示主播、场次名、大小、时长与开播时间。</li>'
-        + '<li><span class="tour-chip">高能时间轴</span>查看精彩片段；<span class="tour-chip">导出弹幕版</span>把弹幕烧进画面生成新视频。</li>'
-        + '<li><span class="tour-chip">下载弹幕文件</span>拿 ASS 字幕；也可<span class="tour-chip">删除</span>整场。</li>'
+        + '<li>表格上方是视频保存目录，并显示 <b>ffmpeg</b> 是否可用——导出弹幕版、重新生成字幕要用到它。</li>'
+        + '<li>下面按场次列出录下的视频：每行是主播、场次名、大小、时长与开播时间。</li>'
         + '<li>页面下方还可能列出<span class="tour-chip">散片</span>——录制中途异常中断留下的视频残段，没用可删。</li>'
         + '</ol>' },
-    { view: 'files', filesTab: 'videos', enter: 'hl', target: '#hlMask .modal', fallback: '#hlBody',
-      title: '高能时间轴',
+    { view: 'files', filesTab: 'videos',
+      target: '#videosTable tr:first-child .v-actions', fallback: '#filesPanelVideos',
+      title: '视频录制 · 每场操作',
+      text: '<ol>'
+        + '<li><b>高能时间轴</b>：按弹幕密度等信号标出可能的高能时刻，可跳转查看或秒切片段。</li>'
+        + '<li><span class="tour-chip">导出弹幕版</span>：把弹幕烧进画面另存一个成品，<span class="tour-kw">原片不动</span>；烧录完成后本行出现<span class="tour-chip">下载弹幕版</span>。</li>'
+        + '<li><span class="tour-chip">下载弹幕文件</span>：取该场的 ASS 字幕，播放器加载后可随时开关，弹幕<span class="tour-kw">不烧进画面</span>。</li>'
+        + '<li><span class="tour-chip">重新生成字幕</span>：改过弹幕样式后，按新样式重出一份字幕。</li>'
+        + '<li><span class="tour-chip">删除</span>：删掉整场视频，<span class="tour-kw">不可恢复</span>。</li>'
+        + '</ol>' },
+    { view: 'files', filesTab: 'videos', enter: 'hl', keepHl: true,
+      /* 不设 fallback：弹窗正文（统计卡 / 心电图）由 app.js 异步渲染，刚打开时只有
+         「正在扫描…」占位。若回退到 #hlBody，挖孔会先罩住整块弹窗正文再缩到统计卡上，
+         看着像闪了一下；没有回退时内容就绪前不画挖孔，气泡居中过渡即可 */
+      targets: ['#hlBody .hl-summary', '#hlEcg'],
+      title: '高能时间轴 · 本场概览',
       text: '<ol>'
         + '<li>它把一场直播里<span class="tour-kw">弹幕突然变密</span>的时间点标出来，当作可能的高能时刻。</li>'
-        + '<li>下方可调<span class="tour-chip">窗口秒数</span>与<span class="tour-chip">Top 条数</span>后<span class="tour-chip">重新分析</span>。</li>'
-        + '<li>可选 <b>A 轻量 / C 深度</b>档让 AI 解读本场，或重新生成弹幕字幕。</li>'
-        + '<li>右上角<span class="tour-chip">关闭</span>收起窗口。</li>'
+        + '<li>顶部四张卡是本场的检测口径：<span class="tour-chip">弹幕</span>总数、<span class="tour-chip">SC</span> 条数、<span class="tour-chip">单窗峰值弹幕</span>，以及<span class="tour-chip">窗口 / Top</span>（窗口秒数与取前几名）。</li>'
+        + '<li><b>本场心电图</b>把几条信号叠在一起看全场走势：鼠标<span class="tour-kw">滚轮缩放、拖拽平移</span>，单击某时刻即可跳到该处。</li>'
+        + '<li>下方图例对应五个图层：弹幕密度 / SC 尖峰（高度=金额）/ 金礼物粒子 / 人气 / 高能窗口。</li>'
+        + '</ol>' },
+    { view: 'files', filesTab: 'videos', keepHl: true,
+      /* 同第 13 步：不设 fallback，避免弹窗正文未渲染完时先把整块正文框起来闪一下 */
+      targets: ['#hlBody .hl-timeline', '#hlBody .hl-card'],
+      title: '高能时间轴 · 弹幕分布与高能窗口',
+      text: '<ol>'
+        + '<li><b>柱状图</b>里每根柱是一个窗口的弹幕密度，金色柱含 SC，<span class="tour-kw">红色描边</span>的是入选的高能窗口。</li>'
+        + '<li>下面每张卡是一个候选切片段：<span class="tour-chip"># 排名</span>、开播时刻、<span class="tour-chip">得分</span>、标签（如 SC 连击），右侧小字是该窗口的弹幕 / SC / 人气与所在分段。</li>'
+        + '<li><span class="tour-chip">高频短语</span>是该窗口里重复最多的弹幕；点<span class="tour-chip">代表弹幕</span>可展开具体几条。</li>'
+        + '<li>操作区能<span class="tour-chip">复制 VLC / ffplay 跳转</span>命令、<b>ffmpeg 无损秒切这段</b>，或按 AI 建议切点秒切；展开<span class="tour-chip">命令行详情</span>可手动执行。</li>'
+        + '<li>底部<span class="tour-chip">相关文件</span>列出该窗口所在分段，可直接下载。</li>'
+        + '</ol>' },
+    { view: 'files', filesTab: 'videos', keepHl: true,
+      target: '.modal-foot', fallback: '#hlMask .modal',
+      title: '高能时间轴 · 底部操作条',
+      text: '<ol>'
+        + '<li><span class="tour-chip">窗口</span>调检测窗口大小（30 / 60 / 90 / 120 秒），<span class="tour-chip">Top</span>取前几名高分窗口。</li>'
+        + '<li>改完点<span class="tour-chip">重新分析</span>，按新参数重跑一遍检测。</li>'
+        + '<li><span class="tour-chip">AI 模式</span>：<b>A 轻量解读</b>快而省，<b>C 深度策划</b>更全、可能补到规则漏掉的片段。</li>'
+        + '<li>点<span class="tour-chip">AI 解读本场</span>让模型给标题 / 封面 / 理由（会用掉你的 Key、按量计费）。</li>'
+        + '<li><span class="tour-chip">重新生成弹幕字幕</span>按当前弹幕样式重出一份 ASS 字幕。</li>'
+        + '<li>看完点右上角<span class="tour-chip">关闭</span>收起整块。</li>'
         + '</ol>' },
     { view: 'analysis', target: '#view-analysis .analysis-side', fallback: '#analysisReport',
       title: '数据分析 · 选择文件',
@@ -177,6 +214,10 @@
 
   let overlay = null, hole = null, tip = null;
   let cur = 0, active = false, savedTab = null;
+  /* 换步后的首次对齐：挖孔直接落位、不播放 180ms 过渡。
+     跨页面 / 跨弹窗时新旧目标差得很远，放任过渡会看到一块框从旧位置滑过去闪一下 */
+  let snapHole = false;
+  let lastWheelAt = 0;       // 滚轮翻步的节流时间戳，一次滚动手势只翻一步
   let hlOpened = false;      // 引导是否打开过高能时间轴弹窗，结束时据此关闭
   let demoAnaPath = null;    // 演示分析勾选的文件路径，结束时据此还原勾选
 
@@ -215,6 +256,11 @@
     if (btn && !btn.classList.contains('active')) btn.click();
   }
 
+  /* 该步是否落在高能时间轴弹窗里。弹窗内各步共用同一个弹窗：
+     进入这类步时若弹窗已经关着（例如从第 16 步往前退回第 15 / 14 步）就补开一次，
+     已经在弹窗里则不做多余动作；换到弹窗外步骤时才收起弹窗 */
+  function inHlStep(step) { return !!(step && (step.keepHl || step.enter === 'hl')); }
+
   /* 进入高能时间轴步骤：等视频场次表出现后打开弹窗（演示数据写入到列表刷新之间有延迟，轮询几次） */
   function openTourHighlights() {
     const hooks = window.LDDTourHooks;
@@ -224,13 +270,30 @@
       if (!btn || !btn.dataset.vup) return false;
       try { hooks.openHighlights(btn.dataset.vup, btn.dataset.hl); hlOpened = true; }
       catch (e) { return false; }
+      resettleModal();
       return true;
     };
     if (tryOpen()) return;
     let n = 0;
     const t = setInterval(() => {
       n += 1;
-      if (tryOpen() || n >= 12 || !active) clearInterval(t);
+      /* 轮询期间可能已经翻到弹窗外或退出教程，先判定再尝试打开，
+         否则会在离开之后把弹窗补开回来 */
+      if (!active || n >= 12 || !inHlStep(STEPS[cur])) { clearInterval(t); return; }
+      if (tryOpen()) clearInterval(t);
+    }, 250);
+  }
+
+  /* 弹窗正文（统计卡 / 心电图）由 app.js 异步渲染：弹窗打开后轮询到内容就绪，
+     再补算一次挖孔与气泡位置，避免首次布局时目标还没出现、挖孔落空 */
+  function resettleModal() {
+    let n = 0;
+    const t = setInterval(() => {
+      n += 1;
+      if (document.querySelector('#hlBody .hl-summary') || n >= 24 || !active) {
+        clearInterval(t);
+        if (active) requestAnimationFrame(layout);
+      }
     }, 250);
   }
 
@@ -344,54 +407,88 @@
     tip.querySelector('.tour-next').textContent = cur === STEPS.length - 1 ? '完成' : '下一步';
   }
 
-  /* 对齐挖孔到目标，并把气泡放到目标旁（下方→上方→右侧→左侧依次尝试） */
+  /* 对齐挖孔到目标，并把气泡放到目标旁（下方→上方→右侧→左侧依次尝试）。
+     目标多为整块面板，若四周都塞不下气泡（挖孔几乎铺满视口），
+     再把挖孔高度截短、让气泡落到下方蒙版区，避免气泡盖住正被介绍的内容 */
   function layout() {
     if (!active) return;
     const step = STEPS[cur];
     const els = targetEls(step);
-    const gap = 12, pad = 6;
+    const gap = 12, pad = 6, minHole = 120;
     const vw = window.innerWidth, vh = window.innerHeight;
     const maxX = () => Math.max(8, vw - tip.offsetWidth - 8);
     const maxY = () => Math.max(8, vh - tip.offsetHeight - 8);
 
-    let r = null;
-    if (els.length) {
-      /* 多目标取并集，把相邻元素框成一整块 */
-      r = unionRect(els);
+    /* 先隐藏气泡并量出尺寸：气泡定位与挖孔截高都依赖它（隐藏状态下 offsetHeight 仍可读） */
+    tip.style.visibility = 'hidden';
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+
+    /* 换步后的首帧：临时关掉挖孔的过渡，让新位置一步到位 */
+    if (snapHole) { hole.style.transition = 'none'; snapHole = false; }
+
+    /* 在挖孔四周找能容纳气泡的一侧，返回未夹取的候选坐标；四边都放不下返回 null。
+       判据用「含内边距的挖孔矩形」而非目标矩形：气泡贴到挖孔外沿而非目标外沿，
+       末尾坐标夹取最多回收 8px，仍小于 gap，不会把气泡盖回高亮区 */
+    function place(r) {
+      const hl = r.left - pad, ht = r.top - pad, hr = r.right + pad, hb = r.bottom + pad;
+      const cx = hl + (hr - hl) / 2 - tw / 2;
+      if (hb + gap + th <= vh) return { x: cx, y: hb + gap };
+      if (ht - gap - th >= 0) return { x: cx, y: ht - gap - th };
+      if (hr + gap + tw <= vw) return { x: hr + gap, y: ht };
+      if (hl - gap - tw >= 0) return { x: hl - gap - tw, y: ht };
+      return null;
+    }
+    /* 按当前矩形重画挖孔；矩形可能被截短，故独立成函数以便二次调用 */
+    function drawHole(r) {
       hole.style.left = (r.left - pad) + 'px';
       hole.style.top = (r.top - pad) + 'px';
       hole.style.width = (r.width + pad * 2) + 'px';
       hole.style.height = (r.height + pad * 2) + 'px';
       hole.style.display = '';
-    } else {
-      hole.style.display = 'none';
     }
 
-    tip.style.visibility = 'hidden';
-    const tw = tip.offsetWidth, th = tip.offsetHeight;
-    let x, y;
+    let r = null;
+    if (els.length) {
+      /* 多目标取并集框成一整块，再裁剪到视口内：目标高于视口（如长表格）或滚出
+         屏幕时，不裁剪挖孔会溢出整屏、蒙版失效 */
+      const u = unionRect(els);
+      const cl = Math.max(0, u.left), ct = Math.max(0, u.top);
+      const cr = Math.min(vw, u.right), cb = Math.min(vh, u.bottom);
+      if (cr - cl > 1 && cb - ct > 1) {
+        r = { left: cl, top: ct, right: cr, bottom: cb, width: cr - cl, height: cb - ct };
+      }
+    }
+
+    let spot = r ? place(r) : null;
     if (!r) {
+      hole.style.display = 'none';
+    } else if (spot) {
+      drawHole(r);
+    } else {
+      /* 四边都放不下：把挖孔截短，给下方腾出气泡的位置。
+         可用高度按含内边距的底边算，并给 minHole 兜底设上限——
+         否则视口偏矮时兜底高度会超过实际余量，截短后的挖孔反而顶到气泡上沿 */
+      const belowRoom = vh - gap - th - pad - r.top;
+      r.height = Math.min(r.height, Math.max(24, Math.min(minHole, belowRoom)));
+      r.bottom = r.top + r.height;
+      drawHole(r);
+      spot = place(r) || { x: r.left, y: vh - th - gap };
+    }
+
+    let x, y;
+    if (!spot) {
       x = clamp((vw - tw) / 2, 8, maxX());
       y = clamp((vh - th) / 2, 8, maxY());
-    } else if (r.bottom + gap + th <= vh) {
-      y = r.bottom + gap;
-      x = clamp(r.left + r.width / 2 - tw / 2, 8, maxX());
-    } else if (r.top - gap - th >= 0) {
-      y = r.top - gap - th;
-      x = clamp(r.left + r.width / 2 - tw / 2, 8, maxX());
-    } else if (r.right + gap + tw <= vw) {
-      x = r.right + gap;
-      y = clamp(r.top, 8, maxY());
-    } else if (r.left - gap - tw >= 0) {
-      x = r.left - gap - tw;
-      y = clamp(r.top, 8, maxY());
     } else {
-      x = clamp(r.left, 8, maxX());
-      y = clamp(vh - th - gap, 8, maxY());
+      x = clamp(spot.x, 8, maxX());
+      y = clamp(spot.y, 8, maxY());
     }
     tip.style.left = x + 'px';
     tip.style.top = y + 'px';
     tip.style.visibility = 'visible';
+    /* 位置已落定，恢复过渡：之后的滚动 / 缩放重排仍保持平滑 */
+    void hole.offsetWidth;
+    hole.style.transition = '';
   }
 
   /* 跳到第 n 步：切换所在页面、渲染气泡，下一帧把目标滚入视口并重新布局 */
@@ -401,11 +498,18 @@
     if (n < 0) n = 0;
     cur = n;
     const step = STEPS[cur];
-    closeTourHighlights();      // 换步先收掉上一波可能开着的高能弹窗
+    /* 换步瞬间先收起挖孔并标记「直接落位」：跨页面 / 跨弹窗时若让挖孔从旧位置平滑过去，
+       会看到一块框划过屏幕（点「下一步」时尤其明显），不如先收掉、下一帧落到新目标上 */
+    if (hole) hole.style.display = 'none';
+    snapHole = true;
+    /* 换步时若新步不在高能弹窗内，收起上一波可能开着的高能弹窗；
+       弹窗内的步骤共用同一个弹窗，中途不关；
+       反向退回弹窗内步骤时弹窗已被关上，这里再补开 */
+    if (!inHlStep(step)) closeTourHighlights();
     switchView(step.view);
     switchTab(step.tab);
     switchFilesTab(step.filesTab);
-    if (step.enter === 'hl') openTourHighlights();
+    if (inHlStep(step)) openTourHighlights();
     else if (step.enter === 'ana') demoAnalysis();
     render();
     requestAnimationFrame(() => {
@@ -417,7 +521,46 @@
 
   /* resize / 滚动时重新对齐挖孔与气泡；Esc 结束教程并记为已完成 */
   function onReflow() { if (active) requestAnimationFrame(layout); }
-  function onKey(e) { if (active && e.key === 'Escape') { e.preventDefault(); end(true); } }
+
+  /* 焦点落在输入类控件里时不抢方向键，让它们照常控制光标 / 下拉 */
+  function typing(e) {
+    const t = e.target;
+    if (!t || !t.tagName) return false;
+    return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+      || t.isContentEditable === true;
+  }
+
+  /* 键盘操作：Esc 结束教程，↑ / ↓ 退一步 / 进一步（PageUp / PageDown 同样可用） */
+  function onKey(e) {
+    if (!active) return;
+    if (e.key === 'Escape') { e.preventDefault(); end(true); return; }
+    if (typing(e)) return;
+    if (e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); go(cur + 1); return; }
+    if (e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); go(cur - 1); }
+  }
+
+  /* 指针下是否有可纵向滚动的容器（弹窗正文、弹幕流、日志终端等）。
+     有的话把滚轮让给它：这些区域自己滚更有用，心电图还要靠滚轮缩放；
+     页面主体 .view 除外——教程本来就会把目标滚进视口，滚轮留给翻步更顺手 */
+  function scrollableUnder(el) {
+    for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+      if (n.classList.contains('view')) return false;
+      const oy = getComputedStyle(n).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight - n.clientHeight > 4) return true;
+    }
+    return false;
+  }
+
+  /* 滚轮翻步：一次滚动手势只翻一步，否则连续事件会一下子翻过好几步 */
+  function onWheel(e) {
+    if (!active || scrollableUnder(e.target)) return;
+    const now = Date.now();
+    if (now - lastWheelAt >= 450) {
+      lastWheelAt = now;
+      go(cur + (e.deltaY > 0 ? 1 : -1));
+    }
+    e.preventDefault();
+  }
 
   /* 演示数据 */
   /* 让 app.js 注入的刷新回调去重载「录制文件」「数据分析」列表（页面没加载过时它自行跳过） */
@@ -444,12 +587,14 @@
     cur = 0;
     hlOpened = false;
     demoAnaPath = null;
+    lastWheelAt = 0;
     /* 记住设置页当前子标签，教程结束后恢复，避免教程改动了用户的记忆 */
     savedTab = null;
     try { savedTab = localStorage.getItem('ldd-settings-tab'); } catch (e) { /* 忽略 */ }
     overlay.hidden = false;
     window.addEventListener('resize', onReflow);
     window.addEventListener('scroll', onReflow, true);
+    window.addEventListener('wheel', onWheel, { passive: false });
     document.addEventListener('keydown', onKey, true);
     go(0);
     demoOn();
@@ -465,6 +610,7 @@
     if (overlay) overlay.hidden = true;
     window.removeEventListener('resize', onReflow);
     window.removeEventListener('scroll', onReflow, true);
+    window.removeEventListener('wheel', onWheel, { passive: false });
     document.removeEventListener('keydown', onKey, true);
     if (savedTab) switchTab(savedTab);
     demoOff();
