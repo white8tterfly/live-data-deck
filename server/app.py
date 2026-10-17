@@ -1,4 +1,10 @@
-"""FastAPI 服务：REST API + WebSocket 实时推送 + 静态 Web UI 托管。"""
+"""FastAPI 服务：REST API + WebSocket 实时推送 + 静态 Web UI 托管。
+
+应用实例由 create_app() 组装，所有路由都写在它里面；Manager 的起停挂在 lifespan 上。
+安全约定：凡是「打开文件/目录」和「按路径读文件」的接口都不接受前端传路径，路径一律
+由服务端配置或 meta 派生，resolve 之后再校验仍落在合法目录内，防目录穿越；SESSDATA、
+LLM Key 只在服务端使用，下发给前端前一律脱敏。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +27,7 @@ from recorder import dedup as dedup_mod
 from recorder import highlights as highlights_mod
 from recorder import llm_analyze as llm_mod
 from recorder import media as media_mod
+from recorder import onboarding_demo as onboarding_mod
 from recorder import report as report_mod
 from recorder import video_recorder as vr_mod
 from recorder import bili_login as bili_login_mod
@@ -34,8 +41,8 @@ from recorder.theme import (CARD_META, CARD_COLS_CHOICES, COLOR_META,
                             ReportTheme, WIDTH_CHOICES, coerce_theme)
 from recorder import following as following_mod
 from server.schemas import (AnalysisIn, CaredUserIn, CookieTestIn, DedupBatchIn,
-                            DedupIn, LlmTestIn, ReportIn, TargetIn, TargetPatch,
-                            TargetsBulkIn, VideoAiIn, VideoCutIn,
+                            DedupIn, EcgSeekIn, LlmTestIn, ReportIn, TargetIn,
+                            TargetPatch, TargetsBulkIn, VideoAiIn, VideoCutIn,
                             VideoSessionIn)
 
 PREVIEW_BYTES = 256 * 1024   # 大文件只从尾部读 256KB
@@ -64,6 +71,11 @@ def create_app() -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):
         mgr = RecorderManager()
+        # 上一次教程中途退出可能留下演示目录，启动先清一次
+        with contextlib.suppress(OSError):
+            onboarding_mod.cleanup_demo(
+                mgr.settings.records_dir, mgr.settings.weak_dir,
+                mgr.settings.video_path())
         await mgr.start()
         app.state.mgr = mgr
         try:
@@ -79,13 +91,15 @@ def create_app() -> FastAPI:
     # 烧录弹幕版导出的进程内任务表：key = "<vup>/<session base>"
     _export_jobs: dict[str, dict] = {}
 
-    # ---------------- 状态 ----------------
+    # 状态
     @app.get("/api/state")
     async def get_state():
+        """全量运行态快照，前端定时轮询（房间列表、录制状态、日志条数等）。"""
         return mgr().snapshot()
 
     @app.get("/api/logs")
     async def get_logs(limit: int = Query(300, ge=1, le=1000)):
+        """取最近日志，同时给出日志目录；目录取自服务端配置，不吃前端路径。"""
         return {"logs": mgr().bus.recent_logs(limit),
                 "dir": str(mgr().settings.log_path())}
 
@@ -119,9 +133,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=f"无法打开文件管理器：{e}")
         return {"ok": True, "path": str(target)}
 
-    # ---------------- 设置 ----------------
+    # 设置
     @app.put("/api/settings")
     async def put_settings(patch: dict):
+        """按 patch 更新设置；注意空字符串=不修改（先 strip 再判真值，防纯空格清空凭证），
+        校验失败 400，成功返回脱敏后的设置。"""
         try:
             s = await mgr().apply_settings(patch)
         except ValueError as e:
@@ -130,6 +146,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/settings/test-cookie")
     async def test_cookie(body: CookieTestIn):
+        """测试 SESSDATA 是否有效；本次没带就回退已保存的，两者皆空按「未填写」返回。"""
         sessdata = body.sessdata
         if sessdata is None:
             sessdata = mgr().settings.effective_sessdata()
@@ -137,9 +154,10 @@ def create_app() -> FastAPI:
             return {"ok": False, "message": "未填写 SESSDATA"}
         return await asyncio.to_thread(verify_sessdata, sessdata)
 
-    # ---------------- B 站扫码登录（半自动获取 SESSDATA）----------------
+    # B 站扫码登录（半自动获取 SESSDATA）
     @app.post("/api/bili-qrcode/generate")
     async def bili_qr_generate():
+        """生成登录二维码；B 站接口异常时 502。扫码得到的凭证不持久化。"""
         try:
             return await asyncio.to_thread(bili_login_mod.generate_qr)
         except bili_login_mod.BiliLoginError as e:
@@ -147,6 +165,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/bili-qrcode/poll")
     async def bili_qr_poll(qrcode_key: str):
+        """轮询扫码状态，扫码成功后一并带回 SESSDATA；B 站接口异常时 502。"""
         try:
             return await asyncio.to_thread(bili_login_mod.poll_qr, qrcode_key)
         except bili_login_mod.BiliLoginError as e:
@@ -154,6 +173,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/settings/test-llm")
     async def test_llm(body: LlmTestIn):
+        """探活 OpenAI 兼容接口；Key 没传就用已保存的，缺 Key 直接回失败，
+        配置不当 400，连不通只在响应体里回消息、不抛错。"""
         s = mgr().settings
         key = (body.api_key or "").strip() or s.llm_api_key
         if not key.strip():
@@ -166,7 +187,7 @@ def create_app() -> FastAPI:
         except llm_mod.LLMRuntimeError as e:
             return {"ok": False, "message": str(e)}
 
-    # ---------------- 房间管理 ----------------
+    # 房间管理
     def _target_payload(t) -> dict:
         """Target 序列化（含房间级覆盖项；dataclass 新增字段自动带上）。"""
         from dataclasses import asdict
@@ -176,6 +197,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/targets")
     async def list_targets():
+        """已配置房间清单，附带各自的房间级覆盖项。"""
         return {"targets": [
             {"room_id": t.room_id, "vup": t.vup, "enabled": t.enabled,
              "record_video": t.record_video, "notify": t.notify,
@@ -194,6 +216,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/targets", status_code=201)
     async def add_target(body: TargetIn):
+        """新增一个房间（201）；room_id 非法或重复等校验失败 400。"""
         try:
             t = await mgr().add_target(
                 body.room_id, body.vup.strip(), body.enabled,
@@ -204,6 +227,7 @@ def create_app() -> FastAPI:
 
     @app.put("/api/targets/{room_id}")
     async def update_target(room_id: int, body: TargetPatch):
+        """改房间及覆盖项（overrides 里显式 null = 恢复跟随全局）；房间不存在 404，取值非法 400。"""
         try:
             t = await mgr().update_target(
                 room_id, body.vup, body.enabled,
@@ -217,6 +241,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/targets/{room_id}")
     async def delete_target(room_id: int):
+        """删除房间；不在运行表中时 404。"""
         if room_id not in mgr().runtimes:
             raise HTTPException(status_code=404, detail="房间不存在")
         await mgr().remove_target(room_id)
@@ -234,9 +259,11 @@ def create_app() -> FastAPI:
             "started": started,
         }
 
-    # ---------------- B 站关注列表（需登录态，增量分页） ----------------
+    # B 站关注列表（需登录态，分页）
     @app.get("/api/followings")
     async def list_followings(page: int = 1):
+        """分页读关注列表，并标出哪些已加入、是否启用；未配置 SESSDATA 400，
+        页码越界 400，凭证失效 401，B 站侧异常 502。"""
         sd = mgr().settings.effective_sessdata()
         if not sd.strip():
             raise HTTPException(
@@ -272,9 +299,10 @@ def create_app() -> FastAPI:
             "items": out,
         }
 
-    # ---------------- 录制控制 ----------------
+    # 录制控制
     @app.post("/api/rooms/{room_id}/start")
     async def start_room(room_id: int):
+        """启动单房间的弹幕录制；房间不存在 404。"""
         if room_id not in mgr().runtimes:
             raise HTTPException(status_code=404, detail="房间不存在")
         await mgr().start_room(room_id)
@@ -282,6 +310,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/rooms/{room_id}/stop")
     async def stop_room(room_id: int):
+        """停止单房间的弹幕录制。"""
         await mgr().stop_room(room_id)
         return {"ok": True}
 
@@ -314,15 +343,40 @@ def create_app() -> FastAPI:
 
     @app.post("/api/start-all")
     async def start_all():
+        """一键启动所有已启用房间，返回实际启动的数量。"""
         started = await mgr().start_all()
         return {"ok": True, "started": started}
 
     @app.post("/api/stop-all")
     async def stop_all():
+        """一键停止全部房间。"""
         await mgr().stop_all()
         return {"ok": True}
 
-    # ---------------- 录制文件 ----------------
+    # 新手引导临时演示数据：教程结束后前端会删除，服务启动时也清一次
+    @app.post("/api/onboarding/demo")
+    async def create_onboarding_demo():
+        """为教程造演示产物：弹幕记录 + 房管弱标签 + 一份视频场次（幂等：重调直接重建）。路径由服务端配置派生。"""
+        try:
+            info = await asyncio.to_thread(
+                onboarding_mod.write_demo, mgr().settings.records_dir,
+                mgr().settings.weak_dir, mgr().settings.video_path())
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"演示数据写入失败：{e}")
+        return {"ok": True, **info}
+
+    @app.delete("/api/onboarding/demo")
+    async def delete_onboarding_demo():
+        """删除 records / weak / video 下的演示目录；都不存在也返回 200（removed=false）。"""
+        try:
+            removed = await asyncio.to_thread(
+                onboarding_mod.cleanup_demo, mgr().settings.records_dir,
+                mgr().settings.weak_dir, mgr().settings.video_path())
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"演示数据删除失败：{e}")
+        return {"ok": True, "removed": removed}
+
+    # 录制文件
     def _base_dir(kind: str) -> Path:
         if kind == "records":
             return mgr().settings.records_dir
@@ -331,6 +385,7 @@ def create_app() -> FastAPI:
         raise HTTPException(status_code=400, detail="kind 必须是 records 或 weak")
 
     def _safe_file(kind: str, rel: str) -> Path:
+        """把前端传来的相对路径收敛到 records/weak 目录内：越界 403，非文件 404。"""
         base = _base_dir(kind).resolve()
         p = (base / rel).resolve()
         try:
@@ -343,6 +398,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/files")
     async def list_files():
+        """扫描 records/weak 两个目录的 jsonl，按修改时间倒序返回。"""
         result = {}
         now = time.time()
         for kind, base in (("records", mgr().settings.records_dir),
@@ -369,6 +425,8 @@ def create_app() -> FastAPI:
     @app.get("/api/files/preview")
     async def preview_file(kind: str, path: str,
                            limit: int = Query(200, ge=1, le=PREVIEW_MAX_LINES)):
+        """预览单个 jsonl。路径先经 _safe_file 校验（越界 403 / 非文件 404）；
+        文件过大时只从尾部读 PREVIEW_BYTES。"""
         p = _safe_file(kind, path)
         try:
             if p.stat().st_size <= PREVIEW_BYTES:
@@ -386,16 +444,19 @@ def create_app() -> FastAPI:
 
     @app.get("/api/files/download")
     async def download_file(kind: str, path: str):
+        """下载单个 jsonl；路径先经 _safe_file 校验。"""
         p = _safe_file(kind, path)
         return FileResponse(p, filename=p.name, media_type="application/x-jsonlines")
 
-    # ---------------- 关心用户名单 ----------------
+    # 关心用户名单
     @app.get("/api/cared-users")
     async def list_cared():
+        """列出关心用户名单（做去重时用来豁免重复判定）。"""
         return {"cared_users": mgr().settings_store.list_cared()}
 
     @app.post("/api/cared-users", status_code=201)
     async def add_cared(body: CaredUserIn):
+        """新增关心用户（201）；key 不合法 400。"""
         try:
             item = mgr().settings_store.add_cared(body.key, body.note)
         except ValueError as e:
@@ -405,21 +466,23 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/cared-users/{key}")
     async def remove_cared(key: str):
+        """按 key 移除；名单里没有该 key 时 404。"""
         if not mgr().settings_store.remove_cared(key):
             raise HTTPException(status_code=404, detail="名单中无此用户")
         mgr().settings = mgr().settings_store.settings
         return {"ok": True}
 
-    # ---------------- 数据分析 ----------------
+    # 数据分析
     @app.post("/api/analysis")
     async def run_analysis(body: AnalysisIn):
+        """对选中的若干 jsonl 做本地统计分析；路径先经 _safe_file 校验，读取失败 500。"""
         files = [_safe_file(body.kind, rel) for rel in body.paths]
         try:
             return await asyncio.to_thread(analysis_mod.analyze_files, files)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"读取失败: {e}")
 
-    # ---------------- 后处理去重 ----------------
+    # 后处理去重
     def _do_dedup(rel: str, kind: str, window_sec: int, write: bool) -> dict:
         src = _safe_file(kind, rel)
         if src.name.endswith(".dedup.jsonl"):
@@ -432,15 +495,17 @@ def create_app() -> FastAPI:
 
     @app.post("/api/dedup/preview")
     async def dedup_preview(body: DedupIn):
+        """只预览不改文件：给出会被移除的弹幕数与样例。"""
         return await asyncio.to_thread(
             _do_dedup, body.path, body.kind, body.window_sec, False)
 
     @app.post("/api/dedup/run")
     async def dedup_run(body: DedupIn):
+        """执行去重并另存为 .dedup.jsonl（原文件不动）；已是去重结果的文件 400。"""
         return await asyncio.to_thread(
             _do_dedup, body.path, body.kind, body.window_sec, True)
 
-    # ---------------- 单场直播战报 ----------------
+    # 单场直播战报
     def _theme_payload():
         store = mgr().theme_store
         return {
@@ -468,10 +533,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/report-theme")
     async def get_report_theme():
+        """读取当前战报主题及可选项 meta（配色/分区/尺寸/朝向等），供设置页渲染。"""
         return _theme_payload()
 
     @app.put("/api/report-theme")
     async def put_report_theme(body: dict):
+        """更新战报主题；取值非法 400，返回更新后的主题。"""
         try:
             th = mgr().theme_store.update(body)
         except ValueError as e:
@@ -480,6 +547,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/report-theme")
     async def reset_report_theme():
+        """把战报主题恢复默认。"""
         th = mgr().theme_store.reset()
         return {"theme": th.public_dict()}
 
@@ -496,11 +564,13 @@ def create_app() -> FastAPI:
 
     @app.get("/api/danmaku-style")
     async def get_danmaku_style():
+        """读取弹幕样式及可选项 meta。"""
         st = ds_mod.get_store()
         return {"style": st.style.public_dict(), "meta": ds_mod.style_meta()}
 
     @app.put("/api/danmaku-style")
     async def put_danmaku_style(body: dict):
+        """更新弹幕样式；取值非法 400。"""
         try:
             style = ds_mod.get_store().update(body)
         except ValueError as e:
@@ -509,6 +579,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/danmaku-style")
     async def reset_danmaku_style():
+        """把弹幕样式恢复默认。"""
         style = ds_mod.get_store().reset()
         return {"style": style.public_dict(), "meta": ds_mod.style_meta()}
 
@@ -528,10 +599,12 @@ def create_app() -> FastAPI:
 
     @app.post("/api/report/summary")
     async def report_summary(body: ReportIn):
+        """生成单场战报摘要（前端预览用，原始曲线点已剔除）。"""
         return await asyncio.to_thread(_build_summary, body.path, body.kind)
 
     @app.post("/api/report/image")
     async def report_image(body: ReportIn):
+        """把单场 jsonl 直接渲染成战报 PNG，按当前主题出图。"""
         def gen() -> bytes:
             src = _safe_file(body.kind, body.path)
             s = report_mod.summarize_file(src)
@@ -544,6 +617,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/dedup/run-batch")
     async def dedup_run_batch(body: DedupBatchIn):
+        """批量去重（逐个另存 .dedup.jsonl），返回各文件结果与移除总数。"""
         results = []
         for rel in body.paths:
             results.append(await asyncio.to_thread(
@@ -551,10 +625,11 @@ def create_app() -> FastAPI:
         return {"results": results,
                 "total_removed": sum(r["removed"] for r in results)}
 
-    # ---------------- 视频录制 ----------------
+    # 视频录制
     SESSION_BASE_RE = re.compile(r"^live_\d{8}_\d{4}$")
 
     def _vup_dir(vup: str) -> Path:
+        """把主播名收敛到视频根目录下的子目录，越界 403。"""
         base = mgr().settings.video_path().resolve()
         p = (base / vup).resolve()
         try:
@@ -564,6 +639,7 @@ def create_app() -> FastAPI:
         return p
 
     def _load_session_meta(vup: str, session_base: str):
+        """校验场次名格式后读取 meta；格式非法 400、元数据缺失 404、内容损坏 500。"""
         if not SESSION_BASE_RE.match(session_base):
             raise HTTPException(status_code=400, detail="场次名格式非法")
         d = _vup_dir(vup)
@@ -617,11 +693,13 @@ def create_app() -> FastAPI:
 
     @app.get("/api/videos/ffmpeg")
     async def video_ffmpeg():
+        """探测 ffmpeg 是否可用及版本信息。"""
         ff = media_mod.find_ffmpeg()
         return {"available": bool(ff), **(ff or {})}
 
     @app.get("/api/videos")
     async def list_videos():
+        """汇总视频目录下每场的分段/切片/烧录产物/AI 结果，以及无 meta 归属的散片。"""
         m = mgr()
         root = m.settings.video_path()
         active = {rt.video_session: rt for rt in m.runtimes.values()
@@ -822,6 +900,8 @@ def create_app() -> FastAPI:
     async def video_highlights(vup: str, session: str,
                                window_sec: int = Query(60, ge=20, le=600),
                                top_n: int = Query(8, ge=1, le=20)):
+        """按时间窗检测该场高能片段，并给出播放器 seek 命令；场次元数据缺失 404，
+        参数或数据异常 400。"""
         d, _mf, meta = _load_session_meta(vup, session)
         jsonl = (mgr().settings.records_dir / vup
                  / str(meta.get("jsonl") or ""))
@@ -848,8 +928,102 @@ def create_app() -> FastAPI:
         result["jsonl_exists"] = jsonl.exists()
         return result
 
+    # 直播心电图
+    @app.get("/api/videos/ecg")
+    async def video_ecg(vup: str, session: str,
+                        bucket: str = "60", points: str = "600"):
+        """只读聚合：把一场直播聚合成多层情绪波形带（弹幕/SC/礼物/人气）。
+
+        路径与分段均由服务端 meta 派生，不接受前端传路径。
+        缺弹幕记录时不报错，返回空序列 + missing 清单供前端显式空态。
+        bucket 非法/越界 → 400；points 超上限自动夹紧到 [60, 4000]。
+        """
+        try:
+            bucket_sec = int(bucket)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="bucket 必须为整数秒")
+        if not 10 <= bucket_sec <= 600:
+            raise HTTPException(status_code=400,
+                                detail="bucket 超出允许范围（10–600 秒）")
+        try:
+            max_points = int(points)
+        except (TypeError, ValueError):
+            max_points = highlights_mod.ECG_MAX_POINTS
+        max_points = max(60, min(4000, max_points))
+
+        d, _mf, meta = _load_session_meta(vup, session)
+        jsonl = (mgr().settings.records_dir / vup
+                 / str(meta.get("jsonl") or ""))
+        meta_for = _meta_with_live(session, meta)
+        try:
+            result = await asyncio.to_thread(
+                highlights_mod.build_ecg, jsonl, meta_for, bucket_sec, max_points)
+        except (ValueError, OSError) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        result["segments"] = [
+            {"file": s.get("file"), "start_ts": s.get("start_ts"),
+             "end_ts": s.get("end_ts")}
+            for s in meta_for.get("segments", [])
+            if not s.get("discarded") and s.get("file")
+        ]
+        result["jsonl_exists"] = jsonl.exists()
+        ff = media_mod.find_ffmpeg()
+        result["ffmpeg"] = {"available": bool(ff), **(ff or {})}
+        result["vup"] = vup
+        result["session"] = session
+        return result
+
+    @app.post("/api/videos/ecg-seek")
+    async def video_ecg_seek(body: EcgSeekIn):
+        """时序点击定位：按 ts 找到所属视频分段与偏移，返回跳转命令（供 ECG 点击 seek）。
+
+        分段由服务端 meta 派生；无有效分段时吸附最近分段起点，避免「无法秒切的空窗口」。
+        """
+        d, _mf, meta = _load_session_meta(body.vup, body.session)
+        meta_for = _meta_with_live(body.session, meta)
+        ts = float(body.ts)
+        part = highlights_mod._locate_part(meta_for, ts)
+        if not part:
+            segs = [s for s in meta_for.get("segments", [])
+                    if not s.get("discarded") and s.get("file")]
+            if not segs:
+                raise HTTPException(status_code=400,
+                                    detail="本场没有可用视频分段，无法定位跳转")
+
+            def _gap_dist(s: dict) -> float:
+                a = float(s.get("start_ts") or 0)
+                b = float(s.get("end_ts") or a)
+                if ts < a:
+                    return a - ts
+                if ts > b:
+                    return ts - b
+                return 0.0
+
+            part = min(segs, key=_gap_dist)
+        part_start = float(part.get("start_ts") or 0)
+        part_end = part.get("end_ts")
+        start_sec = max(0.0, round(ts - part_start, 1))
+        if part_end:
+            end_sec = round(min(max(ts, part_start) + 60, part_end) - part_start, 1)
+        else:
+            end_sec = round(start_sec + 60, 1)
+        if end_sec <= start_sec:
+            end_sec = round(start_sec + 60, 1)
+        ff = media_mod.find_ffmpeg()
+        commands = media_mod.player_commands(
+            ff, d / str(part["file"]), start_sec,
+            max(1.0, end_sec - start_sec), _session_ass_path(d, meta))
+        return {
+            "part": part["file"],
+            "start_sec": start_sec,
+            "end_sec": end_sec,
+            "commands": commands,
+            "ffmpeg": {"available": bool(ff), **(ff or {})},
+        }
+
     @app.get("/api/videos/ai-result")
     async def video_ai_result(vup: str, session: str):
+        """读取该场已缓存的 AI 解读结果；从没跑过 AI 时 404。"""
         d, _mf, meta = _load_session_meta(vup, session)
         ai = llm_mod.load_ai(d / f"{session}.ai.json")
         if not ai:
@@ -859,6 +1033,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/videos/ai-analyze")
     async def video_ai_analyze(body: VideoAiIn):
+        """跑一轮 AI 高能解读，结果缓存到 <session>.ai.json；AI 未配置/模式非法/无弹幕 400，
+        模型侧异常 502。弹幕当不可信数据喂给模型，输出经校验后才渲染。"""
         m = mgr()
         if not m.settings.llm_ready():
             raise HTTPException(
@@ -900,9 +1076,9 @@ def create_app() -> FastAPI:
     async def video_export_sub(body: VideoSessionIn):
         """一键导出烧录弹幕版 MP4：用户显式手动触发，绝不默认烧录；原 FLV 不改动。
 
-        流程：确保 ASS 字幕（没有则现场从弹幕 jsonl 生成）→ 逐段后台烧录
+        流程：先备好 ASS 字幕（没有就现场从弹幕 jsonl 生成）→ 逐段后台烧录
         （libx264 重编码 + 音频流拷贝），产物 <分段名>.danmaku.mp4；
-        多分段按段起始时间平移字幕时间轴。进行中场次拒绝导出。
+        多分段时按段起始时间平移字幕时间轴。进行中/导出中的场次 409。
         """
         d, mf, meta = _load_session_meta(body.vup, body.session)
         key = f"{body.vup}/{body.session}"
@@ -918,7 +1094,7 @@ def create_app() -> FastAPI:
                                      if rt.video_active}:
             raise HTTPException(status_code=409,
                                 detail="该场次正在录制中，请等下播后再导出")
-        # 1) 确保弹幕字幕：没有就现场生成
+        # 1) 先备好弹幕字幕：没有就现场生成
         ass_path = _session_ass_path(d, meta)
         if not ass_path:
             jsonl = (mgr().settings.records_dir / body.vup
@@ -1025,6 +1201,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/videos/cut")
     async def video_cut(body: VideoCutIn):
+        """从某个分段切出一段（最长 900s）另存为 clip；起止非法/分段不属本场 400，
+        路径越界 403，源文件缺失 404，切片失败 400。"""
         d, _mf, meta = _load_session_meta(body.vup, body.session)
         if body.end_sec <= body.start_sec:
             raise HTTPException(status_code=400,
@@ -1060,6 +1238,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/videos/regenerate-ass")
     async def video_regen_ass(body: VideoSessionIn):
+        """重新从弹幕 jsonl 生成该场 ASS 字幕并回写 meta；无可生成数据 400。"""
         d, mf, meta = _load_session_meta(body.vup, body.session)
         jsonl = (mgr().settings.records_dir / body.vup
                  / str(meta.get("jsonl") or ""))
@@ -1084,6 +1263,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/videos/download")
     async def video_download(vup: str, file: str):
+        """下载场次产物，仅允许 FLV/ASS/MP4；路径越界 403，文件不存在 404，后缀不符 400。"""
         d = _vup_dir(vup).resolve()
         p = (d / file).resolve()
         try:
@@ -1102,6 +1282,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/videos")
     async def delete_video(vup: str, session: str):
+        """删除整场（分段、字幕、meta、AI 缓存、切片、烧录产物）；录制中或导出中 409。"""
         d, _mf, meta = _load_session_meta(vup, session)
         if str(meta.get("base")) in {
                 rt.video_session for rt in mgr().runtimes.values()
@@ -1166,9 +1347,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(e))
         return {"ok": True}
 
-    # ---------------- WebSocket ----------------
+    # WebSocket
     @app.websocket("/api/ws")
     async def ws_push(ws: WebSocket):
+        """实时推送通道：接入后先发一份快照加最近 100 条日志，之后持续推事件；
+        断连时注销订阅。"""
         await ws.accept()
         q = mgr().bus.subscribe()
         try:
@@ -1187,6 +1370,6 @@ def create_app() -> FastAPI:
         finally:
             mgr().bus.unsubscribe(q)
 
-    # ---------------- 静态 UI（最后注册，兜底） ----------------
+    # 静态 UI（最后注册，兜底）
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
     return app
