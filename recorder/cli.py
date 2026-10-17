@@ -17,6 +17,7 @@ from .manager import RecorderManager
 
 
 async def _print_logs(mgr: RecorderManager) -> None:
+    """订阅事件总线，把日志事件按 HH:MM:SS 打到控制台。"""
     q = mgr.bus.subscribe()
     try:
         while True:
@@ -30,6 +31,7 @@ async def _print_logs(mgr: RecorderManager) -> None:
 
 
 async def _amain(args) -> None:
+    """命令行主流程：装配管理器（可按参数临时覆盖），启动后等录制任务自然结束。"""
     mgr = RecorderManager()
 
     if args.keep_gifts:
@@ -74,6 +76,7 @@ async def _amain(args) -> None:
 
 
 def main() -> None:
+    """解析命令行参数并进入异步主流程。"""
     parser = argparse.ArgumentParser(description="B站直播弹幕录制器（命令行模式）")
     parser.add_argument("--room", type=int, help="临时录制单个房间号（不读 targets）")
     parser.add_argument("--duration", type=int, default=0,

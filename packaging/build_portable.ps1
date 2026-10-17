@@ -32,12 +32,14 @@ Copy-Item (Join-Path $root "packaging\使用说明.txt") (Join-Path $stage "使�
 # MIT 许可证与第三方组件/商标声明必须随二进制分发物一同提供
 Copy-Item (Join-Path $root "LICENSE") (Join-Path $stage "LICENSE")
 Copy-Item (Join-Path $root "NOTICE") (Join-Path $stage "NOTICE")
+# config/、data/ 各放一个说明 txt，提醒这两个目录含凭证与录制数据，别外传
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "config"), (Join-Path $stage "data") | Out-Null
 Set-Content -Path (Join-Path $stage "config\（配置首次运行自动生成，请勿外传此文件夹）.txt") `
     -Value "settings.json 与 targets.json 在程序首次保存设置时自动生成，包含你的 SESSDATA，请勿外传。" -Encoding UTF8
 Set-Content -Path (Join-Path $stage "data\（录制数据首次运行后自动存放到这里）.txt") `
     -Value "弹幕/人气/礼物等录制数据保存在此，可在设置页修改数据目录。" -Encoding UTF8
 
+# 手工建 zip 而不用 Compress-Archive：条目一律转成正斜杠，解压到 Linux/macOS 也不乱
 Write-Host "[3/5] 压缩 zip（正斜杠条目，跨平台兼容）..." -ForegroundColor Cyan
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Add-Type -AssemblyName System.IO.Compression
@@ -53,6 +55,8 @@ try {
     }
 } finally { $arc.Dispose(); $fs.Close() }
 
+# zip 内容自检：确认没混进 .py 源码 / settings.json / .env / 反斜杠条目，
+# 并核对 exe、使用说明、LICENSE、NOTICE、web/index.html 这几个必需项齐全
 Write-Host "[4/5] 内容自检..." -ForegroundColor Cyan
 $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
 try {

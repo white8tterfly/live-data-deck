@@ -64,6 +64,7 @@ def get_wbi_key(client: httpx.Client) -> str:
 
 
 def wbi_sign(params: dict, mixin_key: str) -> dict:
+    """按 B 站 wbi 规则补 wts、过滤特殊字符并算出 w_rid，返回新 dict（不改入参）。"""
     params = dict(params)
     params["wts"] = int(time.time())
     params = {k: "".join(c for c in str(v) if c not in "!'()*")

@@ -26,6 +26,8 @@ WATCHDOG_POLL_SEC = 60
 
 
 class RecorderManager:
+    """多房间录制任务的管理者：房间增删、录制控制、设置热更新与状态聚合。"""
+
     def __init__(self) -> None:
         self.bus = EventBus()
         self.settings_store = SettingsStore()
@@ -39,8 +41,9 @@ class RecorderManager:
         self._bg_stagger: set[asyncio.Task] = set()
         self.started_at = 0.0
 
-    # ---------- 生命周期 ----------
+    # 生命周期
     async def start(self) -> None:
+        """起事件总线与快照循环；auto_start 打开且已有房间时自动开录。"""
         self.started_at = time.time()
         await self.bus.start()
         try:
@@ -56,6 +59,7 @@ class RecorderManager:
             self.bus.log("info", "服务启动，自动开始录制已启用的房间")
 
     async def shutdown(self) -> None:
+        """停掉全部录制任务、快照循环与事件总线。"""
         await self.stop_all()
         if self._snapshot_task:
             self._snapshot_task.cancel()
@@ -81,16 +85,18 @@ class RecorderManager:
         rt.ov_llm_auto_analyze = t.llm_auto_analyze
 
     async def _snapshot_loop(self) -> None:
+        """每 5s 向所有前端广播一次聚合状态。"""
         while True:
             await asyncio.sleep(SNAPSHOT_INTERVAL)
             self.bus.emit("state", self.snapshot())
 
-    # ---------- 房间 CRUD ----------
+    # 房间 CRUD
     async def add_target(self, room_id: int, vup: str,
                          enabled: bool = True, persist: bool = True,
                          autostart: bool = True,
                          record_video: bool = False,
                          notify: bool = False) -> Target:
+        """新增一个房间，默认持久化并在启用时立即开录；房间已存在时抛 ValueError。"""
         if room_id in self.runtimes:
             raise ValueError(f"房间 {room_id} 已存在")
         if persist:
@@ -146,6 +152,7 @@ class RecorderManager:
                             record_video: bool | None = None,
                             notify: bool | None = None,
                             overrides: dict | None = None) -> Target:
+        """更新房间配置；运行中的任务同步热更新（视频开关、事件开关等即时生效）。"""
         t = self.target_store.update(room_id, vup, enabled,
                                      record_video=record_video,
                                      notify=notify, overrides=overrides)
@@ -187,17 +194,20 @@ class RecorderManager:
         return t
 
     async def remove_target(self, room_id: int) -> None:
+        """停止并删除一个房间。"""
         await self.stop_room(room_id)
         self.target_store.remove(room_id)
         self.runtimes.pop(room_id, None)
         self.bus.log("info", f"已删除房间 {room_id}")
 
-    # ---------- 录制控制 ----------
+    # 录制控制
     def is_running(self, room_id: int) -> bool:
+        """房间任务是否在运行（任务存在且未结束）。"""
         tk = self.tasks.get(room_id)
         return bool(tk and not tk.done())
 
     async def start_room(self, room_id: int) -> None:
+        """启动一个房间的录制任务；已在运行则直接返回。"""
         rt = self.runtimes.get(room_id)
         if not rt:
             raise KeyError(f"房间 {room_id} 不存在")
@@ -226,6 +236,7 @@ class RecorderManager:
         task.add_done_callback(_on_done)
 
     async def stop_room(self, room_id: int) -> None:
+        """取消并等待房间任务退出；任务不存在时静默返回。"""
         task = self.tasks.pop(room_id, None)
         if task and not task.done():
             task.cancel()
@@ -235,6 +246,7 @@ class RecorderManager:
                 pass
 
     async def _start_all(self) -> list[int]:
+        """错峰启动全部已启用房间，并按配置拉起空闲看门狗；返回实际启动的房间号。"""
         targets = [t for t in self.target_store.targets if t.enabled]
         started: list[int] = []
         for i, t in enumerate(targets):
@@ -243,7 +255,6 @@ class RecorderManager:
             if not self.is_running(t.room_id):
                 await self.start_room(t.room_id)
                 started.append(t.room_id)
-        # idle watchdog
         if self.settings.idle_stop_minutes > 0:
             if self._idle_task and not self._idle_task.done():
                 self._idle_task.cancel()
@@ -252,10 +263,12 @@ class RecorderManager:
         return started
 
     async def start_all(self) -> list[int]:
+        """对外入口：开始录制全部已启用房间。"""
         self.bus.log("info", "开始录制全部已启用房间")
         return await self._start_all()
 
     async def stop_all(self) -> None:
+        """停止全部房间任务，并关掉空闲看门狗。"""
         if self._idle_task:
             self._idle_task.cancel()
             self._idle_task = None
@@ -265,8 +278,9 @@ class RecorderManager:
         self.bus.log("info", "全部录制任务已停止")
         self.bus.emit("state", self.snapshot())
 
-    # ---------- 设置 ----------
+    # 设置
     async def apply_settings(self, patch: dict) -> Settings:
+        """应用设置补丁；SESSDATA 或存储路径变更时滚动重启运行中的任务。"""
         old_sess = self.settings.effective_sessdata()
         old_records = str(self.settings.records_dir)
         old_weak = str(self.settings.weak_dir)
@@ -296,8 +310,9 @@ class RecorderManager:
         self.bus.emit("state", self.snapshot())
         return s
 
-    # ---------- 空闲看门狗 ----------
+    # 空闲看门狗
     async def _idle_watchdog(self) -> None:
+        """全部房间关播满 idle_stop_minutes 分钟就自动停录；查询失败保守视为在播，不误停。"""
         minutes = max(1, self.settings.idle_stop_minutes)
         self.bus.log("info",
                      f"空闲停止已启用：全部房间关播 {minutes} 分钟后自动停止")
@@ -333,8 +348,9 @@ class RecorderManager:
                     await self.stop_all()
                     return
 
-    # ---------- 状态聚合 ----------
+    # 状态聚合
     def snapshot(self) -> dict:
+        """聚合全部房间状态与全局统计，供前端定时快照和按需查询。"""
         rooms = [self.runtimes[t.room_id].snapshot()
                  if t.room_id in self.runtimes else
                  self._make_rt(t).snapshot()

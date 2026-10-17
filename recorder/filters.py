@@ -21,10 +21,12 @@ RE_PHONE = re.compile(r"1[3-9]\d{9}")
 
 
 def is_pure_emoticon(text: str) -> bool:
+    """文本剥掉 [表情] 占位后是否只剩空白，即纯大表情弹幕。"""
     return bool(text) and not RE_EMOTICON.sub("", text).strip()
 
 
 def sanitize_text(text: str) -> str:
+    """把链接 / @提及 / QQ / UID / 手机号替换成占位标记后返回。"""
     text = RE_URL.sub("【链接】", text)
     text = RE_MENTION.sub("@【用户】", text)
     text = RE_QQ.sub("【QQ号】", text)
@@ -34,6 +36,7 @@ def sanitize_text(text: str) -> str:
 
 
 def anon_id(real_id: int, salt: str) -> str:
+    """uid 加盐 sha256 取前 16 位十六进制：跨文件稳定，且不可反推真实 uid。"""
     return hashlib.sha256(f"{real_id}:{salt}".encode()).hexdigest()[:16]
 
 

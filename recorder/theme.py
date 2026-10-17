@@ -15,7 +15,7 @@ from .config import CONFIG_DIR, _atomic_write_json
 
 THEME_FILE = CONFIG_DIR / "report_theme.json"
 
-# ---------- 色板键（12 个实际参与渲染的颜色） ----------
+# 色板键（12 个实际参与渲染的颜色）
 COLOR_KEYS = (
     "bg", "panel", "panel2", "border",
     "text", "text2", "text3",
@@ -131,6 +131,7 @@ _HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 @dataclass
 class ReportTheme:
+    """战报视觉主题：配色 / 字体 / 排版 / 区块与卡片显隐和顺序。"""
     # 配色（#RRGGBB）
     bg: str = DEFAULT_COLORS["bg"]
     panel: str = DEFAULT_COLORS["panel"]
@@ -185,20 +186,25 @@ class ReportTheme:
     card_watched: bool = True
 
     def active_sections(self) -> list[str]:
+        """按 sections 顺序取出仍开启的主区块 id。"""
         return [sid for sid in self.sections
                 if getattr(self, f"show_{sid}", False)]
 
     def active_cards(self) -> list[str]:
+        """仍开启的指标卡 key（按 CARD_KEYS 固定顺序）。"""
         return [k for k in CARD_KEYS if getattr(self, f"card_{k}", True)]
 
     def active_ranks(self) -> list[str]:
+        """仍开启的底部榜单列。"""
         return [k for k in RANK_KEYS if getattr(self, f"show_{k}", True)]
 
     def public_dict(self) -> dict:
+        """给前端与落盘的扁平 dict。"""
         return asdict(self)
 
 
 def _hex_color(v) -> str:
+    """校验 #RGB / #RRGGBB 颜色值，统一转大写返回。"""
     s = str(v).strip()
     if not _HEX_RE.match(s):
         raise ValueError(f"颜色值 {s!r} 不合法，需为 #RRGGBB 十六进制格式")
@@ -206,6 +212,7 @@ def _hex_color(v) -> str:
 
 
 def _font_path(v, field_name: str) -> str:
+    """校验字体后缀且文件真实存在，返回展开后的路径；空串表示用系统默认。"""
     s = str(v).strip().strip('"')
     if not s:
         return ""
@@ -300,10 +307,13 @@ def coerce_theme(patch: dict, base: ReportTheme | None = None) -> ReportTheme:
 
 
 class ThemeStore:
+    """report_theme.json 的读写入口；配置损坏时回退默认且不阻断服务。"""
+
     def __init__(self) -> None:
         self.theme = self._load()
 
     def _load(self) -> ReportTheme:
+        """读配置并校验；文件缺失或损坏一律返回默认深色主题。"""
         if not THEME_FILE.exists():
             return ReportTheme()
         try:
@@ -314,19 +324,23 @@ class ThemeStore:
             return ReportTheme()
 
     def save(self, theme: ReportTheme) -> None:
+        """原子落盘并更新内存中的当前主题。"""
         _atomic_write_json(THEME_FILE, theme.public_dict())
         self.theme = theme
 
     def update(self, patch: dict) -> ReportTheme:
+        """在当前主题基础上合并 patch，校验后保存并返回。"""
         theme = coerce_theme(patch, self.theme)
         self.save(theme)
         return theme
 
     def reset(self) -> ReportTheme:
+        """恢复默认主题并落盘。"""
         theme = ReportTheme()
         self.save(theme)
         return theme
 
     @staticmethod
     def presets() -> dict:
+        """内置深色 / 浅色两套配色预设。"""
         return {"dark": dict(DEFAULT_COLORS), "light": dict(LIGHT_COLORS)}

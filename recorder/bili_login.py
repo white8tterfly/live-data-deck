@@ -30,10 +30,11 @@ _CODE_STATUS = {0: "success", 86090: "scanned", 86101: "waiting",
 
 
 class BiliLoginError(RuntimeError):
-    pass
+    """扫码登录流程出错（请求失败 / B 站返回异常 / 解析失败）。"""
 
 
 def _client() -> httpx.Client:
+    """单次请求用的短超时客户端（登录接口无需保持长连接）。"""
     return httpx.Client(
         timeout=12,
         headers={"User-Agent": _UA,

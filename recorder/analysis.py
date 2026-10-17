@@ -23,6 +23,7 @@ MODE_NAMES = {1: "滚动", 4: "底部", 5: "顶部"}
 
 
 def _iter_records(path: Path):
+    """逐行读 jsonl，跳过空行与坏行。"""
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -35,6 +36,7 @@ def _iter_records(path: Path):
 
 
 def _len_bucket(n: int) -> str:
+    """弹幕字数 → LEN_LABELS 里的档位标签。"""
     if n <= 5:
         return LEN_LABELS[0]
     if n <= 10:
@@ -47,6 +49,12 @@ def _len_bucket(n: int) -> str:
 
 
 def analyze_files(paths: list[Path]) -> dict:
+    """把多个录制文件聚合成「数据分析」页所需的 JSON 结构。
+
+    第一遍逐文件统计弹幕 / SC / 礼物 / 管理事件、用户与各类计数，并记录
+    整体与单文件时间范围；时间轴固定切成 TIMELINE_BUCKETS 个弹幕桶。
+    第二遍只重扫高能分钟，按内容去重取高频弹幕与 SC。全程只读，不改任何文件。
+    """
     files_stat = []
     total_dm = total_sc = total_gift = total_mod = 0
     sc_amount = gift_amount = 0.0
@@ -130,7 +138,7 @@ def analyze_files(paths: list[Path]) -> dict:
             "start": f_t0, "end": f_t1,
         })
 
-    # ---- 时间轴 48 桶 ----
+    # 时间轴 48 桶
     timeline = []
     if t_min and t_max and t_max > t_min:
         span = t_max - t_min
@@ -155,7 +163,7 @@ def analyze_files(paths: list[Path]) -> dict:
     else:
         peak_idx = 0
 
-    # ---- 高能分钟 Top 5（二次扫描：按内容去重统计高频弹幕 / SC） ----
+    # 高能分钟 Top 5（二次扫描：按内容去重统计高频弹幕 / SC）
     peak_mins = sorted(minutes.items(), key=lambda kv: kv[1],
                        reverse=True)[:PEAK_MINUTES]
     peak_set = {m for m, _ in peak_mins}

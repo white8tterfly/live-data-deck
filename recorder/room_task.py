@@ -34,7 +34,7 @@ from .models import RoomRuntime
 from .session import LiveRoomSession
 from .video_recorder import video_supervise
 
-# ---- 房管处置弱标签：滚动缓冲参数 ----
+# 房管处置弱标签：滚动缓冲参数
 RECENT_MAX_N = 5000
 RECENT_WINDOW_SEC = 1800
 CONTEXT_N = 20
@@ -130,7 +130,7 @@ async def record_room(rt: RoomRuntime, settings: Settings,
         fast_fails = 0
         token, hosts, host_idx = None, [], 0
         while True:
-            # ---- 未开播门控：不持有 WS，轮询等开播 ----
+            # 未开播门控：不持有 WS，轮询等开播
             if session.live_status != 1:
                 rt.connected = False
                 bus.emit("room_state", rt.snapshot())
@@ -222,6 +222,7 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                             rt.room_id)
 
                     async def heartbeat() -> None:
+                        """25s 一次应用层心跳；收到关闭请求就主动断开，释放并发名额。"""
                         while True:
                             await asyncio.sleep(P.HEARTBEAT_INTERVAL)
                             if state.get("close_requested"):
@@ -306,7 +307,7 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                         f"[{rt.vup}] 连接异常: {type(e).__name__}: {str(e)[:80]}",
                         rt.room_id)
 
-            # ---- 统一重连决策 ----
+            # 统一重连决策
             lifetime = time.time() - connected_at
             rt.connected = False
             if state.get("close_requested"):
@@ -396,6 +397,10 @@ def _record_popularity(info: dict, session: LiveRoomSession, rt: RoomRuntime,
 def _handle_message(op: int, payload: bytes, session: LiveRoomSession,
                     rt: RoomRuntime, state: dict, bus: EventBus,
                     records_dir, weak_dir, salt: str, opts: dict) -> None:
+    """处理一条 WS 业务消息：弹幕 / SC / 礼物 / 开播下播 / 房管处置，其余忽略。
+
+    opts 是每条消息现算出的房间级事件开关，设置改动下一条即生效。
+    """
     # op=3（心跳应答）现网固定回 1，不再含人气；人气改由 HTTP 轮询，见 pop_poll
     if op != 5:
         return

@@ -14,6 +14,12 @@ from . import protocol as P
 
 
 class LiveRoomSession:
+    """单个直播间的 HTTP 会话，跟随一个录制任务从建连到结束（多次 WS 重连复用）。
+
+    持有 httpx.Client、风控指纹与 wbi key，以及开播状态等直播元信息；遇 -352 风控由
+    refresh_credentials() 重建签名凭证。
+    """
+
     def __init__(self, room_id: int, sessdata: str = ""):
         self.room_id = room_id
         self.sessdata = sessdata.strip()
@@ -76,6 +82,7 @@ class LiveRoomSession:
         return "; ".join(parts)
 
     def auth_payload(self, token: str) -> bytes:
+        """组装 WS 认证包 JSON；protover=2 表示要收 zlib 压缩的弹幕包。"""
         return json.dumps({
             "uid": self.uid, "roomid": self.real_room_id, "protover": 2,
             "platform": "web", "type": 2, "buvid": self.buvid3, "key": token,
@@ -208,6 +215,7 @@ class LiveRoomSession:
         }
 
     def close(self) -> None:
+        """关闭底层 HTTP 连接池。"""
         self.client.close()
 
 

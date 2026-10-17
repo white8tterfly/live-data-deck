@@ -1,7 +1,7 @@
 """FLV 头部元数据零依赖探测：视频像素分辨率（宽 / 高）。
 
 生成 ASS 字幕时需要知道真实视频尺寸（PlayResX/Y 要与视频一致，字号/车道/速度
-才能与原生观感对齐），但 ffmpeg 不随程序内置，不能强依赖外部进程。本模块直接
+才能与原生观感对齐），但 ffmpeg 不随程序内置，不能强依赖外部进程，于是改为直接
 解析 FLV 字节流头部：
 
 1. script tag（onMetaData，AMF0）里的 width/height（多数 CDN 转码流带）；
@@ -71,7 +71,7 @@ def probe_flv_dims(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-# ---------------- AMF0 onMetaData ----------------
+# AMF0 onMetaData
 
 def _dims_from_amf(body: bytes) -> tuple[int, int] | None:
     """从 script tag body（AMF0）找 onMetaData 的 width/height（double）。"""
@@ -186,7 +186,7 @@ class _AMF0:
         raise _AMFError("object not terminated")
 
 
-# ---------------- H.264 SPS ----------------
+# H.264 SPS
 
 def _dims_from_avc_config(payload: bytes) -> tuple[int, int] | None:
     """解析 AVCDecoderConfigurationRecord 中第一个 SPS 得到 (宽, 高)。"""
@@ -229,6 +229,7 @@ def _rbsp(nal: bytes) -> bytes:
 
 
 def _dims_from_sps_nal(nal: bytes) -> tuple[int, int] | None:
+    """从单个 SPS NAL 用 exp-Golomb 解出帧宽高（含 crop 修正）；失败返回 None。"""
     try:
         rbsp = _rbsp(nal)
         br = _BitReader(rbsp)
@@ -287,6 +288,7 @@ def _dims_from_sps_nal(nal: bytes) -> tuple[int, int] | None:
 
 
 def _skip_scaling_list(br: "_BitReader", size: int) -> None:
+    """按 H.264 规则跳过一段 scaling list（只推进位游标，不取值）。"""
     last = next_scale = 8
     for _ in range(size):
         if next_scale != 0:
@@ -301,12 +303,15 @@ class _BitError(Exception):
 
 
 class _BitReader:
+    """沿 NAL RBSP 逐位读：u(n) 定长、ue/se 指数哥伦布；越界抛 _BitError。"""
+
     def __init__(self, data: bytes) -> None:
         self.d = data
         self.byte_i = 0
         self.bit_i = 0
 
     def u(self, n: int) -> int:
+        """读 n 位无符号整数（MSB 优先）。"""
         v = 0
         for _ in range(n):
             if self.byte_i >= len(self.d):
@@ -336,6 +341,7 @@ class _BitReader:
 
 
 def _valid_dims(w: float, h: float) -> bool:
+    """宽高是否为合理正整数：排除 0 / NaN / Inf 与超范围值，允许竖屏。"""
     try:
         w, h = float(w), float(h)
     except (TypeError, ValueError):

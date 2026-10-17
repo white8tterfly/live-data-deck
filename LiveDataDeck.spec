@@ -4,10 +4,11 @@
 打包：pyinstaller LiveDataDeck.spec --noconfirm
 产物：dist/LiveDataDeck/LiveDataDeck.exe（web 资源在 _internal/web，只读）
       config/ 与 data/ 首次运行时自动创建在 exe 同级目录。
-注意：本配置只打包 web/ 静态资源，绝不打包本机 config/settings.json（含凭证）。
+只打包 web/ 静态资源，不含本机 config/settings.json（含凭证）。
 """
 from PyInstaller.utils.hooks import collect_submodules
 
+# uvicorn 有些子模块是按字符串动态导入的，收集起来免得运行时缺模块报错
 hidden = [
     "uvicorn.lifespan.on",
     "uvicorn.lifespan.off",
@@ -28,6 +29,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
+    # 用不到的绘图/科学计算等大包直接排除，缩体积
     excludes=["tkinter", "matplotlib", "numpy", "pandas", "pytest"],
     noarchive=False,
 )

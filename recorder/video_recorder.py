@@ -49,13 +49,15 @@ class DiskLowError(RuntimeError):
     """磁盘剩余空间低于阈值。"""
 
 
-# ---------------- 场次元数据 ----------------
+# 场次元数据
 
 def meta_path_for(out_dir: Path, base: str) -> Path:
+    """场次 base 名（如 live_20260101_1200）对应的元数据文件路径。"""
     return out_dir / f"{base}.meta.json"
 
 
 def write_meta(meta: dict, path: Path) -> None:
+    """原子写元数据：先写 .tmp 再 replace，避免读取方读到半截 JSON。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
@@ -64,6 +66,7 @@ def write_meta(meta: dict, path: Path) -> None:
 
 
 def load_meta(path: Path) -> dict | None:
+    """读元数据；文件缺失或损坏（含写入中的 .tmp）一律返回 None。"""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -71,6 +74,7 @@ def load_meta(path: Path) -> dict | None:
 
 
 def _free_gb(path: Path) -> float:
+    """磁盘剩余空间（GB）；查询失败返回一个大数，视作空间充足而不误停。"""
     try:
         return shutil.disk_usage(path).free / (1024 ** 3)
     except OSError:
@@ -83,12 +87,13 @@ def _eff_video_qn(rt: RoomRuntime, settings: Settings) -> int:
 
 
 def _eff_auto_analyze(rt: RoomRuntime, settings: Settings) -> bool:
+    """房间覆盖的 AI 自动解读开关（None=跟随全局）。"""
     if rt.ov_llm_auto_analyze is None:
         return settings.llm_auto_analyze
     return rt.ov_llm_auto_analyze
 
 
-# ---------------- 协程入口 ----------------
+# 协程入口
 
 async def video_supervise(rt: RoomRuntime, session: LiveRoomSession,
                           settings: Settings, bus: EventBus,
@@ -104,10 +109,10 @@ async def video_supervise(rt: RoomRuntime, session: LiveRoomSession,
     poll_sec = max(10, settings.offline_poll_sec)
     try:
         while True:
-            # ---- 门控 1：等两个开关齐备（纯本地状态，睡眠零网络请求）----
+            # 门控 1：等两个开关齐备（纯本地状态，睡眠零网络请求）
             while not rt.record_video or not global_on():
                 await asyncio.sleep(2)
-            # ---- 门控 2：开关齐备后才轮询开播状态（避免未开视频的房间白白发请求）----
+            # 门控 2：开关齐备后才轮询开播状态（避免未开视频的房间白白发请求）
             while session.live_status != 1:
                 await asyncio.sleep(poll_sec)
                 try:
@@ -461,9 +466,10 @@ async def _record_segment(rt: RoomRuntime, url: str, headers: dict,
         return ("io_error", f"{type(e).__name__}: {str(e)[:60]}")
 
 
-# ---------------- ASS 旁挂弹幕字幕（v2：原生观感渲染） ----------------
+# ASS 旁挂弹幕字幕（v2：原生观感渲染）
 
 def _ass_time(sec: float) -> str:
+    """秒 → ASS 时间戳 H:MM:SS.cc（负值按 0 处理）。"""
     sec = max(0.0, sec)
     h = int(sec // 3600)
     m = int((sec % 3600) // 60)
@@ -472,6 +478,7 @@ def _ass_time(sec: float) -> str:
 
 
 def _ass_escape(text: str) -> str:
+    """转义弹幕文本：花括号换成全角（防被当成 ASS 覆写标签），换行折成空格。"""
     return (text.replace("{", "｛").replace("}", "｝")
                 .replace("\r", " ").replace("\n", " ")
                 .strip())
@@ -530,6 +537,7 @@ class _ScrollLane:
 
     def scroll_ok(self, t: float, w: float, dur: float,
                   v: float, W: float, gap: float) -> bool:
+        """t 时刻发射这条滚动弹幕，是否会与固定弹幕或车道内上一条重叠。"""
         end = t + dur
         for fs, fe in self.fixed:
             if t < fe and fs < end:
@@ -563,11 +571,13 @@ class _ScrollLane:
         return te
 
     def add_fixed(self, t: float, dur: float) -> None:
+        """登记一条固定弹幕的占用窗，顺手清掉已过期的窗。"""
         self.fixed.append((t, t + dur))
         # 只保留未过期的占用窗
         self.fixed = [(s, e) for s, e in self.fixed if e > t]
 
     def put_scroll(self, t: float, w: float) -> None:
+        """记下本车道刚发射的滚动弹幕，供下一条做碰撞判断。"""
         self.last_t, self.last_w = t, w
 
 
@@ -688,7 +698,7 @@ def generate_ass(jsonl_path: Path, ass_path: Path, meta: dict,
         return None
 
     W, H, dims_src = _resolve_dims(ass_path, meta, style, ffmpeg_info)
-    # ---- 布局常量（全部随真实分辨率自适应）----
+    # 布局常量（随真实分辨率自适应）
     S = max(16, round(H / 28 * float(style.font_scale)))
     LH = round(S * 1.25)
     margin = max(6, round(H * 0.02))
@@ -840,7 +850,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         break
             continue
 
-        # ---- 普通弹幕 ----
+        # 普通弹幕
         text = _ass_escape(ev["text"])[:120]
         if not text:
             continue
@@ -877,7 +887,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     placed = True
                     break
             continue
-        # ---- 滚动（mode 1/2/3 及其它）----
+        # 滚动（mode 1/2/3 及其它）
         lane_idx = -1
         for i, lane in enumerate(lanes):
             if lane.scroll_ok(rel, w, dur, v, W, gap):

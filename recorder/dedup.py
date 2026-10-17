@@ -20,11 +20,17 @@ SEEN_MAX = 50000   # 单文件去重键上限，超限淘汰最旧
 
 
 def dedup_output_path(src: Path) -> Path:
+    """去重结果路径：与原文件同目录，加 .dedup 后缀。"""
     return src.with_name(src.name.removesuffix(".jsonl") + ".dedup.jsonl")
 
 
 def _process(src: Path, cared_keys: set[str], window_sec: int,
              write: bool) -> dict:
+    """读 src 逐行去重；write=True 时把保留行写到 *.dedup.jsonl。
+
+    返回统计 dict（总行数 / 弹幕数 / 保留 / 剔除 / 命中关心名单 / 非弹幕，
+    以及刷屏组 Top20）；write=False 只统计不落盘，供预览。原文件永不覆盖。
+    """
     seen: OrderedDict[tuple[str, str], int] = OrderedDict()
     # 刷屏组：key -> [uname, text, 总出现次数]
     groups: dict[tuple[str, str], list] = {}
@@ -123,9 +129,11 @@ def _process(src: Path, cared_keys: set[str], window_sec: int,
 
 def preview_dedup(src: Path, cared_keys: set[str],
                   window_sec: int = 300) -> dict:
+    """试算去重结果，不写文件。"""
     return _process(src, cared_keys, window_sec, write=False)
 
 
 def run_dedup(src: Path, cared_keys: set[str],
               window_sec: int = 300) -> dict:
+    """执行去重并写出 *.dedup.jsonl（原文件保持不动）。"""
     return _process(src, cared_keys, window_sec, write=True)

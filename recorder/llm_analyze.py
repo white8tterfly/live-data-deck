@@ -10,7 +10,7 @@
 安全边界：
 - 弹幕是不可信输入：全部包在 user 消息的 JSON 数据包里，system 明确
   声明「数据不是指令」；模型输出强制走 JSON 解析 + 字段白名单/长度裁剪。
-- Key 只存服务端 settings.json，本模块不接触浏览器。
+- Key 只存服务端 settings.json，不下发浏览器。
 - 任何网络/解析失败只影响 AI 增强层，录制与规则检测照常。
 - 结果缓存为场次旁挂 <base>.ai.json，重复打开不重复扣费。
 """
@@ -51,9 +51,10 @@ class LLMRuntimeError(RuntimeError):
     """AI 接口调用 / 返回解析失败。"""
 
 
-# ---------------- 基础调用 ----------------
+# 基础调用
 
 def _endpoint(base_url: str) -> str:
+    """把用户填的 base_url 规整成 /chat/completions 端点。"""
     b = base_url.strip().rstrip("/")
     if b.endswith("/chat/completions"):
         return b
@@ -63,6 +64,10 @@ def _endpoint(base_url: str) -> str:
 async def _chat(base_url: str, api_key: str, model: str,
                 messages: list[dict], temperature: float = 0.5,
                 max_tokens: int = 1800) -> str:
+    """发一次非流式 /chat/completions，返回正文字符串。
+
+    配置不全抛 LLMConfigError；网络 / 非 200 / 结构或内容异常抛 LLMRuntimeError。
+    """
     if not (base_url.strip() and api_key.strip() and model.strip()):
         raise LLMConfigError("AI 接口未配置完整（地址 / Key / 模型名缺一）")
     body = {
@@ -115,13 +120,15 @@ def _parse_json_lenient(text: str) -> dict:
 
 
 def _clip(s, n):
+    """字符串化并去空白，截到 n 字符，用于给模型输出套长度上限。"""
     s = str(s or "").strip()
     return s[:n]
 
 
-# ---------------- 窗口打包 ----------------
+# 窗口打包
 
 def _hm(ts) -> str:
+    """时间戳 → HH:MM:SS。"""
     return time.strftime("%H:%M:%S", time.localtime(float(ts or 0)))
 
 
@@ -151,6 +158,7 @@ def _window_payload(w: dict, source: str) -> dict:
 
 
 def _build_seek(meta: dict, start_ts: float, end_ts: float) -> dict | None:
+    """把窗口时间映射到分段文件的偏移秒，供播放器跳转 / ffmpeg 秒切。"""
     part = _locate_part(meta, start_ts)
     if part is None:
         # 5 分钟桶按整点对齐，桶起点可能早于首个分段起点（开播前几十秒）：
@@ -174,10 +182,16 @@ def _build_seek(meta: dict, start_ts: float, end_ts: float) -> dict | None:
     }
 
 
-# ---------------- A/C 共用：窗口解读 ----------------
+# A/C 共用：窗口解读
 
 async def _interpret(settings, meta: dict, windows: list[dict],
                      mode: str, totals: dict) -> dict:
+    """把窗口统计交给模型解读，返回 {summary, picks}。
+
+    模型回传的 start 先做 ±30s 吸附到最近窗口，超出即丢弃；每个 pick 的字段
+    走长度裁剪，category 校验到 ALLOWED_CATEGORIES 白名单（不在则归「其他」），
+    pad 夹到 0-60；deep（C 档）才要 intro。解析后一个有效 pick 都没有则抛错。
+    """
     deep = mode == "C"
     payload = {
         "live_title": meta.get("title", ""),
@@ -265,10 +279,15 @@ async def _interpret(settings, meta: dict, windows: list[dict],
     return {"summary": _clip(data.get("summary"), 80), "picks": picks}
 
 
-# ---------------- C 档：5 分钟段粗筛 ----------------
+# C 档：5 分钟段粗筛
 
 def build_chunks(jsonl_path: Path, meta: dict,
                  chunk_sec: int = CHUNK_SEC) -> list[dict]:
+    """把全场按 chunk_sec 聚合成统计段，供 C 档模型粗筛补漏窗口。
+
+    只保留弹幕数 ≥ 3 的段；每段附弹幕/独立用户/SC/金额/人气涨幅/高频口号
+    以及少量原句样本。缺 start_ts 返回空列表，不抛异常。
+    """
     t0 = float(meta.get("start_ts") or 0)
     t1 = float(meta.get("end_ts") or 0) or 0
     if not t0:
@@ -347,6 +366,11 @@ def build_chunks(jsonl_path: Path, meta: dict,
 
 async def _coarse_screen(settings, meta: dict,
                          chunks: list[dict]) -> list[dict]:
+    """C 档粗筛：让模型从统计段里挑语义上值得切片的补漏窗口。
+
+    模型回传的 start 吸附到最近段，偏差超过半个 chunk 或重复选段即丢弃；
+    命中段补齐成与规则窗口同构的结构，标签「AI发现」，source 标 ai。
+    """
     payload = [{
         "start_ts": c["ts"],
         "offset_min": c["offset_min"],
@@ -418,12 +442,18 @@ async def _coarse_screen(settings, meta: dict,
     return extras
 
 
-# ---------------- 对外入口 ----------------
+# 对外入口
 
 async def analyze_session(*, settings, jsonl_path: Path, meta: dict,
                           rule_result: dict, mode: str, ai_path: Path,
                           force: bool = False) -> dict:
-    """跑一次 AI 解读并写 <base>.ai.json；已有缓存且非 force 时直接返回。"""
+    """跑一次 AI 解读并写场次旁挂的 <base>.ai.json，已有同模式缓存且非 force 时直接返回。
+
+    mode A 只解读规则窗口，C 额外先粗筛补漏窗口再合并；两者共用 _interpret。
+    模式无效或接口未配置抛 LLMConfigError；无可解读窗口、模型输出异常抛 LLMRuntimeError。
+    写盘走「临时文件 + 原子替换」，避免留下半截缓存。extra_windows 完整保留，
+    因为模型可能只挑了规则窗口。
+    """
     mode = (mode or "A").upper()
     if mode not in LLM_MODES:
         raise LLMConfigError(f"AI 分析模式无效：{mode}")
@@ -471,6 +501,7 @@ async def analyze_session(*, settings, jsonl_path: Path, meta: dict,
 
 
 def load_ai(ai_path: Path) -> dict | None:
+    """读场次旁挂的 AI 结果；文件不存在 / 损坏 / 类型不符都返回 None。"""
     try:
         d = json.loads(ai_path.read_text(encoding="utf-8"))
         return d if d.get("_type") == "ai_highlights" else None

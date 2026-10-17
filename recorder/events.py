@@ -25,6 +25,8 @@ _LOG_FILE_NAME = "app.log"
 
 
 class EventBus:
+    """进程内异步事件总线：录制侧 emit，WebSocket 订阅者与日志缓冲消费。"""
+
     def __init__(self) -> None:
         self._queue: asyncio.Queue[dict[str, Any]] | None = None
         self._subscribers: set[asyncio.Queue] = set()
@@ -38,10 +40,12 @@ class EventBus:
         self._file_logger: logging.Logger | None = None
 
     async def start(self) -> None:
+        """建事件队列并启动分发协程（须在事件循环内调用）。"""
         self._queue = asyncio.Queue(maxsize=10000)
         self._pump_task = asyncio.create_task(self._pump())
 
     async def stop(self) -> None:
+        """停分发协程、给订阅者发 shutdown，并关闭文件日志。"""
         if self._pump_task:
             self._pump_task.cancel()
             self._pump_task = None
@@ -52,7 +56,7 @@ class EventBus:
                 pass
         self.close_log_file()
 
-    # ---------- 文件日志 ----------
+    # 文件日志
     def configure_log_file(self, log_dir: Path) -> Path:
         """启用/切换按天滚动的文件日志。目录不存在则创建；同目录重复调用幂等。
 
@@ -110,9 +114,11 @@ class EventBus:
 
     @property
     def log_file_dir(self) -> Path | None:
+        """当前文件日志目录；未启用返回 None。"""
         return self._file_dir
 
     def emit(self, type_: str, data: dict[str, Any] | None = None) -> None:
+        """投递事件到主队列（非阻塞）。未 start 时静默丢弃，队列满时丢一条最老事件腾位。"""
         if self._queue is None:
             return
         evt = {"type": type_, "ts": time.time(), "data": data or {}}
@@ -126,6 +132,10 @@ class EventBus:
                 pass
 
     def log(self, level: str, msg: str, room_id: int | None = None) -> None:
+        """写一条运行日志：进环形缓冲、落盘文件，并投递给前端。
+
+        level 不在白名单内时按 info 处理；文件日志失败只吞掉异常，不影响录制与页面。
+        """
         level = level if level in LOG_LEVELS else "info"
         rec = {"level": level, "msg": msg, "room_id": room_id,
                "ts": time.time()}
@@ -139,19 +149,23 @@ class EventBus:
         self.emit("log", rec)
 
     def recent_logs(self, limit: int = 300) -> list[dict]:
+        """取最近 limit 条日志；limit<=0 时返回全部缓冲。"""
         if limit <= 0:
             return list(self.log_buffer)
         return list(self.log_buffer)[-limit:]
 
     def subscribe(self) -> asyncio.Queue:
+        """登记新订阅者并返回其专属队列（各队列独立，互不拖累）。"""
         q: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._subscribers.add(q)
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
+        """摘掉订阅者队列。"""
         self._subscribers.discard(q)
 
     async def _pump(self) -> None:
+        """主队列分发循环：扇出到各订阅者，队列满的慢消费者丢最老消息、多次失败则剔除。"""
         assert self._queue is not None
         while True:
             evt = await self._queue.get()

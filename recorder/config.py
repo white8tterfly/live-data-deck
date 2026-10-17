@@ -118,6 +118,11 @@ def _load_dotenv() -> None:
 
 @dataclass
 class Settings:
+    """全局录制设置，持久化在 config/settings.json。
+
+    涵盖凭证、存储目录、录制开关、视频直录、AI 解读与调度几块；改动统一走
+    SettingsStore.update() 校验后整体提交，不直接改字段。
+    """
     # 凭证
     sessdata: str = ""
     anon_salt: str = "meowmod-default-salt"
@@ -158,14 +163,17 @@ class Settings:
     cared_users: list[dict] = field(default_factory=list)
 
     def data_path(self) -> Path:
+        """数据根目录：data_dir 为空时落到项目内 data/。"""
         return Path(self.data_dir).expanduser() if self.data_dir else DEFAULT_DATA_DIR
 
     @property
     def records_dir(self) -> Path:
+        """弹幕记录目录；子目录名留空时回退默认 records。"""
         return self.data_path() / (self.records_subdir.strip() or "records")
 
     @property
     def weak_dir(self) -> Path:
+        """房管弱标签目录；子目录名留空时回退默认 weak_label。"""
         return self.data_path() / (self.weak_subdir.strip() or "weak_label")
 
     def video_path(self) -> Path:
@@ -195,6 +203,7 @@ class Settings:
         return os.environ.get("SESSDATA", "").strip() or self.sessdata.strip()
 
     def effective_salt(self) -> str:
+        """匿名盐：环境变量 DANMAKU_ANON_SALT 优先，其次配置，最后内置默认。"""
         return (os.environ.get("DANMAKU_ANON_SALT", "").strip()
                 or self.anon_salt.strip() or "meowmod-default-salt")
 
@@ -220,12 +229,17 @@ class Settings:
 
 @dataclass
 class Target:
+    """单个录制目标（直播间）。
+
+    room_id 为直播间真实数字号，vup 兼作落盘目录名；下方的房间级覆盖字段为 None
+    表示跟随设置页全局默认。
+    """
     room_id: int
     vup: str
     enabled: bool = True
     record_video: bool = False        # 该房间是否同时录制直播视频（默认关）
     notify: bool = False              # 该房间开播时是否发送提醒（浏览器通知/邮件等通道）
-    # ---- 房间级覆盖（None=跟随设置页全局默认）----
+    # 房间级覆盖（None=跟随设置页全局默认）
     record_sc: bool | None = None
     record_gifts: bool | None = None
     record_moderation: bool | None = None
@@ -238,11 +252,14 @@ class Target:
 
 
 class SettingsStore:
+    """settings.json 的读写与校验入口，进程内单份实例。"""
+
     def __init__(self) -> None:
         _load_dotenv()
         self.settings = self._load()
 
     def _load(self) -> Settings:
+        """从 settings.json 读入已知字段，并对关心名单做容错清洗；文件损坏回退默认。"""
         kwargs: dict = {}
         if SETTINGS_FILE.exists():
             try:
@@ -330,7 +347,7 @@ class SettingsStore:
             # 空串视为「不修改」（表单留空保存）；清空凭证请直接删 settings.json
             if val:
                 s.sessdata = val
-        # ---- AI 解读配置 ----
+        # AI 解读配置
         if patch.get("llm_base_url") is not None:
             s.llm_base_url = str(patch["llm_base_url"]).strip().rstrip("/")
         if patch.get("llm_model") is not None:
@@ -368,13 +385,16 @@ class SettingsStore:
         return s
 
     def save(self) -> None:
+        """把当前设置原子写入 settings.json。"""
         _atomic_write_json(SETTINGS_FILE, asdict(self.settings))
 
-    # ---------- 关心用户名单 ----------
+    # 关心用户名单
     def list_cared(self) -> list[dict]:
+        """关心名单的列表副本（增删走 add_cared / remove_cared）。"""
         return list(self.settings.cared_users)
 
     def add_cared(self, key: str, note: str = "") -> dict:
+        """加入关心名单并返回该条目；已存在时不给 note 会报错，给了 note 则更新备注。"""
         key = validate_cared_key(key)
         for item in self.settings.cared_users:
             if item["key"] == key:
@@ -390,6 +410,7 @@ class SettingsStore:
         return item
 
     def remove_cared(self, key: str) -> bool:
+        """按 key 移除，返回是否真的删掉了（key 不存在返回 False 且不落盘）。"""
         key = str(key).strip().lower()
         before = len(self.settings.cared_users)
         self.settings.cared_users = [
@@ -400,14 +421,18 @@ class SettingsStore:
         return True
 
     def cared_key_set(self) -> set[str]:
+        """关心名单的 key 集合，供后处理去重时快速命中。"""
         return {i["key"] for i in self.settings.cared_users}
 
 
 class TargetStore:
+    """targets.json 的读写入口；targets 为内存列表，任何变更立即原子落盘。"""
+
     def __init__(self) -> None:
         self.targets: list[Target] = self._load()
 
     def _load(self) -> list[Target]:
+        """读取 targets.json；覆盖项做宽容解析，单条坏数据跳过而非整体失败。"""
         if not TARGETS_FILE.exists():
             return []
         try:
@@ -440,6 +465,7 @@ class TargetStore:
         return out
 
     def save(self) -> None:
+        """把目标列表原子写入 targets.json（保留 _说明 字段供手工编辑者参考）。"""
         _atomic_write_json(TARGETS_FILE, {
             "_说明": "录制目标（也可在 Web 界面「房间管理」中维护）。"
                     "room_id=直播间URL中的数字；vup=保存目录名。",
@@ -447,10 +473,12 @@ class TargetStore:
         })
 
     def get(self, room_id: int) -> Target | None:
+        """按 room_id 查目标，不存在返回 None。"""
         return next((t for t in self.targets if t.room_id == room_id), None)
 
     def add(self, room_id: int, vup: str, enabled: bool = True,
             record_video: bool = False, notify: bool = False) -> Target:
+        """新增一个目标；房间已存在时抛 ValueError。立即落盘。"""
         if self.get(room_id):
             raise ValueError(f"房间 {room_id} 已存在")
         t = Target(room_id=room_id, vup=vup or f"room_{room_id}",
@@ -486,6 +514,10 @@ class TargetStore:
                record_video: bool | None = None,
                notify: bool | None = None,
                overrides: dict | None = None) -> Target:
+        """按传入字段局部更新目标；overrides 经 coerce_room_overrides 校验后写入。
+
+        房间不存在抛 KeyError；None 表示该字段不动。
+        """
         t = self.get(room_id)
         if not t:
             raise KeyError(f"房间 {room_id} 不存在")
@@ -505,5 +537,6 @@ class TargetStore:
         return t
 
     def remove(self, room_id: int) -> None:
+        """删除目标（不存在时静默无操作）并落盘。"""
         self.targets = [t for t in self.targets if t.room_id != room_id]
         self.save()

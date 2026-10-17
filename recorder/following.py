@@ -32,6 +32,7 @@ class FollowingError(Exception):
 
 
 def _norm_item(raw: dict) -> dict | None:
+    """把关注接口的一条原始记录规整成前端用结构；room_id 非正数返回 None。"""
     room_id = raw.get("roomid") or raw.get("room_id")
     try:
         room_id = int(room_id)

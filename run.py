@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""启动入口：python run.py → 启动本地 Web 服务并自动打开浏览器。
+"""启动入口：python run.py 起本地 Web 服务，稍后自动打开浏览器。
 
-参数:
-    --host HOST       监听地址（默认 127.0.0.1，仅本机访问）
-    --port PORT       端口（默认 8787）
-    --no-browser      不自动打开浏览器
+--host 监听地址（默认 127.0.0.1，仅本机可达）、--port 端口（默认 8787）、
+--no-browser 不自动开浏览器。应用实例来自 server.app.create_app。
 """
 from __future__ import annotations
 
@@ -19,6 +17,7 @@ from server.app import create_app
 
 
 def main() -> None:
+    """解析命令行参数，拉起 uvicorn，按需延时自动开浏览器。"""
     parser = argparse.ArgumentParser(description="B站直播弹幕录制器")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)

@@ -23,6 +23,7 @@ DEFAULT_FONT_BOLD = "C:/Windows/Fonts/msyhbd.ttc"
 
 
 def _hex2rgb(h: str) -> tuple[int, int, int]:
+    """#RRGGBB → (r, g, b)。"""
     h = h.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
@@ -46,6 +47,7 @@ class FontResolver:
         self._cache: dict = {}
 
     def get(self, size: int, bold: bool = False):
+        """取字体；实际字号 = 档位 × 主题缩放，缓存按 (字体路径, 像素字号) 区分。"""
         from PIL import ImageFont
         # 字号档位在加载时整体缩放，缓存按实际像素字号区分
         size = max(1, int(round(size * self._scale)))
@@ -67,6 +69,7 @@ class FontResolver:
 
 
 def _iter_records(path: Path):
+    """逐行读 jsonl，跳过空行与坏行（单行解析失败不影响整场）。"""
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -79,7 +82,11 @@ def _iter_records(path: Path):
 
 
 def summarize_file(path: Path) -> dict:
-    """离线聚合单个录制文件。"""
+    """离线聚合单个录制文件，返回渲染战报所需的全部字段。
+
+    header 取首条 session_header；弹幕/SC/礼物/人气逐条累加；
+    dm_bars 始终按 60s 分桶，与「弹幕峰值」卡片口径一致。
+    """
     header = {}
     danmaku = users_n = sc_n = gift_n = 0
     sc_amount = gift_amount = 0.0
@@ -241,7 +248,7 @@ def enrich_online(s: dict, sessdata: str = "") -> dict:
     return s
 
 
-# ================= PNG 渲染 =================
+# PNG 渲染
 
 def _text_w(draw, txt, font) -> int:
     return int(draw.textlength(str(txt), font=font))
@@ -263,6 +270,7 @@ def _fit_font(draw, txt, fonts: "FontResolver", start_size: int, max_w: int,
 
 
 def _wrap(draw, txt, font, max_w):
+    """按像素宽度折行，最多保留两行（标题区）。"""
     lines, cur = [], ""
     for ch in str(txt):
         if ch == "\n":
@@ -294,6 +302,7 @@ def _fmt_dur(sec) -> str:
 
 
 def _download_cover(url: str):
+    """尽力拉取封面，任何失败（含空 url）返回 None 走占位图。"""
     if not url:
         return None
     try:
@@ -340,9 +349,10 @@ def _cover_placeholder(w, h, pal: Palette, fonts: FontResolver):
     return img
 
 
-# ---------- 指标卡定义：key → (标签, 取值, 色板属性名) ----------
+# 指标卡定义：key → (标签, 取值, 色板属性名)
 
 def _card_defs(s: dict):
+    """汇总结构 → 卡片列表；顺序即展示顺序。"""
     rate = round(s["danmaku"] / s["span_sec"] * 60, 1) if s["span_sec"] else 0
     return [
         ("danmaku", "弹幕总数", _fmt_n(s["danmaku"]), "text"),
@@ -364,9 +374,10 @@ def _card_defs(s: dict):
     ]
 
 
-# ---------- 五个可排序/可隐藏的主区块 ----------
+# 五个可排序 / 可隐藏的主区块
 
 def _sec_summary(img, d, s, th, pal, fonts, x, y, w):
+    """头图区：封面 + 标题 / 主播 / 时间 / 累计看过，返回下一区块的 y。"""
     # 封面比例约 16:9；横屏宽幅给更大封面，竖屏长图保持紧凑
     if th.orientation == "landscape":
         cover_w, cover_h = 620, 349
@@ -409,6 +420,7 @@ def _sec_summary(img, d, s, th, pal, fonts, x, y, w):
 
 
 def _sec_cards(img, d, s, th, pal, fonts, x, y, w):
+    """指标卡区：按主题列数铺卡，文字逐号缩放入格。"""
     active = set(th.active_cards())
     cards = [c for c in _card_defs(s) if c[0] in active]
     if not cards:
@@ -443,6 +455,7 @@ def _sec_cards(img, d, s, th, pal, fonts, x, y, w):
 
 
 def _sec_pop(img, d, s, th, pal, fonts, x, y, w):
+    """人气曲线区；无采样数据时画空态提示。"""
     pop_h = 400 if th.orientation == "landscape" else 300
     _panel(d, img, x, y, w, pop_h, pal)
     f_h2 = fonts.get(20, bold=True)
@@ -460,6 +473,7 @@ def _sec_pop(img, d, s, th, pal, fonts, x, y, w):
 
 
 def _sec_dm(img, d, s, th, pal, fonts, x, y, w):
+    """弹幕时间分布柱状区。"""
     dm_h = 280 if th.orientation == "landscape" else 210
     _panel(d, img, x, y, w, dm_h, pal)
     d.text((x + 20, y + 16), "弹幕时间分布",
@@ -482,6 +496,7 @@ _RANK_DEFS = {
 
 
 def _sec_ranklists(img, d, s, th, pal, fonts, x, y, w):
+    """三个榜单区（高频弹幕 / SC 贡献 / 粉丝牌），按可用列数并排。"""
     keys = th.active_ranks()
     if not keys:
         return y  # 三个榜单全部关闭：不占垂直空间
@@ -519,6 +534,10 @@ _SECTION_RENDERERS = {
 
 def render_png(s: dict, out_path: Path | None = None,
                theme: ReportTheme | None = None) -> bytes:
+    """渲染一页 PNG 战报；给定 out_path 则落盘，否则直接把字节返回。
+
+    画布先按固定高度开，末尾按实际内容裁剪，因此宽度 / 字号 / 区块数变化都不会留白边。
+    """
     from PIL import Image, ImageDraw
 
     th = theme or ReportTheme()
@@ -619,6 +638,7 @@ def _nice_bounds(vlo, vhi, ticks: int = 4):
 
 
 def _downsample(points, max_n=480):
+    """点太多时按段峰值保持抽样，保住尖峰不被均值抹平。"""
     if len(points) <= max_n:
         return points
     step = len(points) / max_n
@@ -632,6 +652,7 @@ def _downsample(points, max_n=480):
 
 
 def _draw_pop_curve(d, s, x, y, w, h, pal: Palette, fonts: FontResolver):
+    """画人气面积折线：Y 轴量程自适应，波动窄时截断纵轴并标注。"""
     pts = _downsample(s["pop_series"])
     t0, t1 = pts[0][0], pts[-1][0]
     span = max(1, t1 - t0)
@@ -704,6 +725,7 @@ def _draw_pop_curve(d, s, x, y, w, h, pal: Palette, fonts: FontResolver):
 
 def _draw_bars(d, bars, x, y, w, h, pal: Palette, fonts: FontResolver,
                t0=None, bucket=60):
+    """弹幕分钟柱状图；峰值柱高亮并标注折算后的条/分。"""
     vmax = max(max(bars), 1)
     n = len(bars)
     slot = w / n
@@ -799,4 +821,5 @@ def demo_summary() -> dict:
 
 
 def render_demo_png(theme: ReportTheme) -> bytes:
+    """用内置样例数据渲染一张预览图。"""
     return render_png(demo_summary(), theme=theme)

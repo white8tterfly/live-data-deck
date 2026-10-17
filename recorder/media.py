@@ -102,6 +102,7 @@ _ASS_TIME_RE = re.compile(r"^(\d+):(\d{1,2}):(\d{1,2})\.(\d{1,2})$")
 
 
 def _ass_time_to_sec(s: str) -> float | None:
+    """ASS 时间戳 H:MM:SS.cc → 秒；格式不符返回 None。"""
     m = _ASS_TIME_RE.match(s.strip())
     if not m:
         return None
@@ -110,6 +111,7 @@ def _ass_time_to_sec(s: str) -> float | None:
 
 
 def _sec_to_ass_time(t: float) -> str:
+    """秒 → ASS 时间戳 H:MM:SS.cc（负值按 0 处理，厘秒进位截到 99）。"""
     t = max(0.0, t)
     h = int(t // 3600)
     mi = int(t % 3600 // 60)
@@ -269,4 +271,5 @@ def burn_subtitle(ffmpeg: dict, src: Path, ass_path: Path, dst: Path,
 
 
 def _quote(s: str) -> str:
+    """带空格的参数补上双引号，让回显的命令行可直接粘贴执行。"""
     return f'"{s}"' if " " in s else s

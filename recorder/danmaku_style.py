@@ -67,6 +67,7 @@ SC_FALLBACK_ACCENT = "#F6C34B"
 
 @dataclass
 class DanmakuStyle:
+    """弹幕字幕渲染配置：画布 / 字体 / 速度 / 密度 / 颜色 / SC 卡片。"""
     canvas_mode: str = "auto"
     canvas_w: int = 1920
     canvas_h: int = 1080
@@ -82,9 +83,11 @@ class DanmakuStyle:
     sc_card: bool = True          # SC 原生风卡片；关闭则退回底部一行文字
 
     def cross_seconds(self) -> float:
+        """一条弹幕横穿整屏的基准秒数（按速度档位取值）。"""
         return SPEED_CROSS_SECONDS.get(self.speed, 9.0)
 
     def public_dict(self) -> dict:
+        """给前端与落盘的扁平 dict。"""
         return asdict(self)
 
 
@@ -175,10 +178,13 @@ def style_meta() -> dict:
 
 
 class DanmakuStyleStore:
+    """danmaku_style.json 的读写入口；配置损坏时回退默认且不阻断服务。"""
+
     def __init__(self) -> None:
         self.style = self._load()
 
     def _load(self) -> DanmakuStyle:
+        """读配置并校验；文件缺失或损坏一律返回默认样式。"""
         if not STYLE_FILE.exists():
             return DanmakuStyle()
         try:
@@ -189,15 +195,18 @@ class DanmakuStyleStore:
             return DanmakuStyle()
 
     def save(self, style: DanmakuStyle) -> None:
+        """原子落盘并更新内存中的当前样式。"""
         _atomic_write_json(STYLE_FILE, style.public_dict())
         self.style = style
 
     def update(self, patch: dict) -> DanmakuStyle:
+        """在当前样式基础上合并 patch，校验后保存并返回。"""
         style = coerce_style(patch, self.style)
         self.save(style)
         return style
 
     def reset(self) -> DanmakuStyle:
+        """恢复内置默认样式并落盘。"""
         style = DanmakuStyle()
         self.save(style)
         return style

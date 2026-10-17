@@ -50,12 +50,14 @@ def ensure_out_file(session: LiveRoomSession, rt: RoomRuntime,
 
 
 def append_record(out_file: Path, rec: dict, rt: RoomRuntime, kind: str) -> None:
+    """追加一行 jsonl 并同步刷新运行时计数（kind 决定 counters 键）。"""
     rt.bump(kind)
     with out_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
 def append_moderation(out_dir: Path, vup: str, rec: dict) -> Path:
+    """把房管处置弱标签追加到 weak_YYYYMMDD.jsonl，返回落盘路径。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"weak_{_today()}.jsonl"
     with out_file.open("a", encoding="utf-8") as f:
