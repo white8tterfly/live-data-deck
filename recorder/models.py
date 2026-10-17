@@ -11,6 +11,10 @@ STATUS_TEXT = {0: "未开播", 1: "直播中", 2: "轮播"}
 
 @dataclass
 class RoomRuntime:
+    """单房间运行态：录制协程写入、管理器读取、API 序列化给前端。
+
+    统计类字段（counters / _rate_window / _ecg_buckets）只存内存，进程重启即清零。
+    """
     room_id: int
     vup: str
     enabled: bool = True
@@ -61,15 +65,35 @@ class RoomRuntime:
         "emoticon_skipped": 0, "moderation": 0,
     })
     _rate_window: deque = field(default_factory=lambda: deque())
+    # 直播心电图 L1：滚动分钟桶（仅计数，不含弹幕文本），最多保留近 60 分钟，
+    # 供 snapshot 下发给房间卡迷你 sparkline；轻量，不增加可感知 WS 流量
+    _ecg_buckets: deque = field(default_factory=lambda: deque(maxlen=60))
+
+    def _ecg_bucket(self, now: float | None = None) -> dict:
+        """取（或新建）当前分钟桶；分钟切换时才追加，桶数上限 60。"""
+        t = int((now or time.time()) // 60) * 60
+        dq = self._ecg_buckets
+        if dq and dq[-1]["t"] == t:
+            return dq[-1]
+        b = {"t": t, "dm": 0, "sc": 0, "gift": 0, "pop": 0}
+        dq.append(b)
+        return b
 
     def bump(self, kind: str, n: int = 1) -> None:
+        """按 kind 累加计数并刷新最近事件时间。
+
+        弹幕 / SC / 礼物额外进速率窗口与心电图桶，其余事件只计数。
+        """
         self.counters[kind] = self.counters.get(kind, 0) + n
         self.last_event_at = time.time()
         if kind in ("danmaku", "super_chat", "gift"):
             self._rate_window.append(self.last_event_at)
             self._trim_rate()
+            key = {"danmaku": "dm", "super_chat": "sc", "gift": "gift"}[kind]
+            self._ecg_bucket()[key] += n
 
     def _trim_rate(self) -> None:
+        """丢掉速率窗口里超过 60 秒的记录。"""
         cutoff = time.time() - 60
         w = self._rate_window
         while w and w[0] < cutoff:
@@ -77,21 +101,28 @@ class RoomRuntime:
 
     @property
     def rate_per_min(self) -> int:
+        """近 60 秒互动速率（弹幕 + SC + 礼物）。"""
         self._trim_rate()
         return len(self._rate_window)
 
     def update_popularity(self, value: int) -> None:
+        """更新当前人气与峰值，并写入心电图桶。"""
         # <=1 视为无效：WS 心跳在现网固定回 1，HTTP 失败兜底也可能给 0
         if value <= 1:
             return
         self.popularity_now = value
         if value > self.popularity_peak:
             self.popularity_peak = value
+        b = self._ecg_bucket()
+        if value > b["pop"]:
+            b["pop"] = value
 
     def uptime_sec(self) -> int:
+        """任务已运行秒数；未启动返回 0。"""
         return int(time.time() - self.started_at) if self.started_at else 0
 
     def conn_sec(self) -> int:
+        """本次 WS 连接已持续秒数；未连接返回 0。"""
         return int(time.time() - self.connected_at) if self.connected_at else 0
 
     def video_reset(self) -> None:
@@ -106,6 +137,7 @@ class RoomRuntime:
         self.video_error = ""
 
     def video_sec(self) -> int:
+        """本场视频已录秒数；未在录返回 0。"""
         return int(time.time() - self.video_started_at) if self.video_started_at else 0
 
     def phase(self) -> str:
@@ -121,6 +153,7 @@ class RoomRuntime:
         return "waiting"
 
     def snapshot(self) -> dict:
+        """打包给前端的房间状态快照（相位、计数器、心电图桶、覆盖项等）。"""
         return {
             "room_id": self.room_id,
             "vup": self.vup,
@@ -145,6 +178,8 @@ class RoomRuntime:
             "rate_per_min": self.rate_per_min,
             "popularity_now": self.popularity_now,
             "popularity_peak": self.popularity_peak,
+            "ecg": {"window_min": 60,
+                    "buckets": [dict(b) for b in self._ecg_buckets]},
             "record_video": self.record_video,
             "notify": self.notify,
             "video_active": self.video_active,

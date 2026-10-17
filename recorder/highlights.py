@@ -23,6 +23,7 @@ W_DM, W_SC, W_POP = 0.55, 0.28, 0.17
 
 
 def _iter_jsonl(path: Path):
+    """逐行读 jsonl，跳过空行与坏行。"""
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -50,6 +51,16 @@ def _locate_part(meta: dict, ts: float) -> dict | None:
 def detect_highlights(jsonl_path: Path, meta: dict,
                       window_sec: int = WINDOW_SEC,
                       top_n: int = TOP_N) -> dict:
+    """扫描场次 jsonl，返回 Top N 高能窗口与整场时间轴。
+
+    每条记录按 window_sec 落桶，桶内累计弹幕量 / 独立用户 / SC 条数与金额 /
+    人气最大涨幅；三信号各自归一化后按 W_DM/W_SC/W_POP 加权成 score。
+    候选需弹幕达标或 SC、人气出现极强单点；再按 score 降序挑选，
+    相邻窗口互斥抑制 120s（SUPPRESS_BUCKETS），选中的连续桶合并成段。
+    每个窗口附 part/偏移秒的定位信息，供播放器跳转与 ffmpeg 秒切。
+
+    缺 start_ts 或 jsonl 不存在时抛错；时间窗内无数据则返回空结果 + note。
+    """
     t0 = float(meta.get("start_ts") or 0)
     t1 = float(meta.get("end_ts") or 0) or 0
     if not t0:
@@ -270,5 +281,173 @@ def detect_highlights(jsonl_path: Path, meta: dict,
 
 
 def _hm(ts: float) -> str:
+    """时间戳 → HH:MM。"""
     import time as _t
     return _t.strftime("%H:%M", _t.localtime(ts))
+
+
+# 直播心电图（Live ECG）聚合
+
+ECG_BUCKET_SEC = 60
+ECG_MAX_POINTS = 600
+
+
+def build_ecg(jsonl_path: Path, meta: dict,
+              bucket_sec: int = ECG_BUCKET_SEC,
+              max_points: int = ECG_MAX_POINTS) -> dict:
+    """把一场直播聚合成一条情绪波形带（多层信号），供前端 ECG 绘制。
+
+    分层信号（同一时间桶）：
+    - 弹幕密度 dm（连续折线/面积主轨迹）
+    - SC 条数 sc + 金额合计 sc_amount（竖向金色尖峰，高度=金额）
+    - 金礼物 gift 条数 + 营收 gift_amount（粒子点；银瓜子免费礼物不计）
+    - 人气 pop（底层半透明面积；25s 采样，>1 才有效）
+
+    桶数超过 max_points 时做**峰值保持下采样**（分组内弹幕/SC金额/礼物/人气取最大值，
+    另附求和值供 tooltip），禁止只取均值把尖峰抹平。只读扫描，不落任何文件。
+    缺 jsonl 时不抛异常，返回空序列 + missing 清单，供前端显式空态。
+    """
+    t0 = float(meta.get("start_ts") or 0)
+    t1 = float(meta.get("end_ts") or 0)
+    if not t0:
+        raise ValueError("场次 meta 缺少 start_ts")
+
+    buckets: dict[int, dict] = {}
+    seen = {"danmaku": 0, "super_chat": 0, "gift": 0, "popularity": 0}
+    last_ts = t0
+
+    def bucket(b: int) -> dict:
+        if b not in buckets:
+            buckets[b] = {"dm": 0, "sc": 0, "sc_amount": 0.0,
+                          "gift": 0, "gift_amount": 0.0, "pop": 0}
+        return buckets[b]
+
+    if jsonl_path.exists():
+        for rec in _iter_jsonl(jsonl_path):
+            typ = rec.get("_type")
+            ts = rec.get("ts")
+            if not ts:
+                continue
+            ts = float(ts)
+            if ts < t0 - 1:
+                continue
+            if t1 and ts > t1 + 1:
+                continue
+            if ts > last_ts:
+                last_ts = ts
+            b = int(ts // bucket_sec) * bucket_sec
+            if typ == "danmaku":
+                bucket(b)["dm"] += 1
+                seen["danmaku"] += 1
+            elif typ == "super_chat":
+                d = bucket(b)
+                d["sc"] += 1
+                try:
+                    d["sc_amount"] += float(rec.get("price_rmb") or 0)
+                except (TypeError, ValueError):
+                    pass
+                seen["super_chat"] += 1
+            elif typ == "gift":
+                if str(rec.get("coin_type") or "").lower() == "gold":
+                    d = bucket(b)
+                    d["gift"] += 1
+                    try:
+                        d["gift_amount"] += float(rec.get("total_coin") or 0) / 1000.0
+                    except (TypeError, ValueError):
+                        pass
+                    seen["gift"] += 1
+            elif typ == "popularity":
+                try:
+                    val = int(rec.get("popularity") or 0)
+                except (TypeError, ValueError):
+                    val = 0
+                if val > 1:
+                    d = bucket(b)
+                    if val > d["pop"]:
+                        d["pop"] = val
+                    seen["popularity"] += 1
+
+    end_ref = t1 or last_ts
+    if jsonl_path.exists():
+        b0 = int(t0 // bucket_sec) * bucket_sec
+        # 末桶取「包含 end_ts 的分钟」：end_ts 恰在整分钟边界时不额外多出一个空桶
+        b_end = max(b0, int((end_ref - 1) // bucket_sec) * bucket_sec)
+        b_end = max(b_end, int(last_ts // bucket_sec) * bucket_sec)
+        for b in range(b0, b_end + bucket_sec, bucket_sec):
+            bucket(b)
+
+    bkeys = sorted(buckets)
+    series = [{
+        "ts": b,
+        "dm": buckets[b]["dm"],
+        "dm_sum": buckets[b]["dm"],
+        "sc": buckets[b]["sc"],
+        "sc_amount": round(buckets[b]["sc_amount"], 1),
+        "sc_amount_max": round(buckets[b]["sc_amount"], 1),
+        "gift": buckets[b]["gift"],
+        "gift_amount": round(buckets[b]["gift_amount"], 1),
+        "pop": buckets[b]["pop"],
+        "span": 1,
+    } for b in bkeys]
+
+    raw_points = len(series)
+    group_sec = bucket_sec
+    downsampled = False
+    if max_points and raw_points > max_points:
+        series, group_sec = _downsample_ecg(series, max_points, bucket_sec)
+        downsampled = True
+
+    missing = [k for k in ("danmaku", "super_chat", "gift", "popularity")
+               if seen[k] == 0]
+    dm_peak = max((p["dm"] for p in series), default=0)
+    pop_peak = max((p["pop"] for p in series), default=0)
+    note = ""
+    if not jsonl_path.exists():
+        note = "本场没有弹幕记录文件，无情绪波形可画（视频本身不受影响）"
+    elif not any(seen.values()):
+        note = "本场时间窗内没有弹幕 / SC / 礼物 / 人气数据"
+
+    return {
+        "base": meta.get("base"),
+        "start_ts": t0,
+        "end_ts": t1 or last_ts,
+        "bucket_sec": bucket_sec,
+        "group_sec": group_sec,
+        "raw_points": raw_points,
+        "downsampled": downsampled,
+        "series": series,
+        "missing": missing,
+        "note": note,
+        "totals": {
+            "danmaku": seen["danmaku"],
+            "super_chat": seen["super_chat"],
+            "sc_amount": round(sum(p["sc_amount"] for p in series), 1),
+            "gift": seen["gift"],
+            "gift_amount": round(sum(p["gift_amount"] for p in series), 1),
+            "dm_peak": dm_peak,
+            "pop_peak": pop_peak,
+        },
+    }
+
+
+def _downsample_ecg(series: list[dict], max_points: int,
+                    bucket_sec: int) -> tuple[list[dict], int]:
+    """峰值保持下采样：分组内弹幕/SC金额/礼物/人气取最大值，附求和与跨度。"""
+    n = len(series)
+    group = (n + max_points - 1) // max_points
+    out: list[dict] = []
+    for i in range(0, n, group):
+        chunk = series[i:i + group]
+        out.append({
+            "ts": chunk[0]["ts"],
+            "dm": max(c["dm"] for c in chunk),
+            "dm_sum": sum(c["dm_sum"] for c in chunk),
+            "sc": sum(c["sc"] for c in chunk),
+            "sc_amount": round(sum(c["sc_amount"] for c in chunk), 1),
+            "sc_amount_max": round(max(c["sc_amount_max"] for c in chunk), 1),
+            "gift": sum(c["gift"] for c in chunk),
+            "gift_amount": round(sum(c["gift_amount"] for c in chunk), 1),
+            "pop": max(c["pop"] for c in chunk),
+            "span": len(chunk),
+        })
+    return out, bucket_sec * group
