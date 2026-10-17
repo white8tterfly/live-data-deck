@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>直播数据舱 · B站直播全数据录制与分析</title>
-<link rel="stylesheet" href="/styles.css?v=57">
+<!-- 静态资源带 ?v=N 防缓存版本号：改动对应文件后把 N 加一，浏览器才会加载新版本 -->
+<link rel="stylesheet" href="/styles.css?v=62">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fb7299'/%3E%3Cstop offset='1' stop-color='%23ff8a63'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='12' fill='url(%23g)'/%3E%3Cg fill='%23fff'%3E%3Ccircle cx='14.1' cy='24' r='3.7'/%3E%3Crect x='21.1' y='17.9' width='4' height='12.2' rx='2' fill-opacity='.9'/%3E%3Crect x='27.5' y='12.8' width='4' height='22.4' rx='2'/%3E%3Crect x='33.9' y='20.5' width='4' height='7' rx='2' fill-opacity='.72'/%3E%3C/g%3E%3C/svg%3E">
 <script>
 /* 主题尽早生效，避免日间模式下先闪一屏深色 */
@@ -75,12 +76,13 @@
       <div class="ws-dot" id="wsDot" title="实时连接状态"></div>
       <span id="wsText">连接中…</span>
       <span class="version"
-            title="本工具为独立开源项目，与哔哩哔哩（B站/bilibili）无任何隶属、合作或背书关系">非官方 · v1.5.1</span>
+            title="本工具为独立开源项目，与哔哩哔哩（B站/bilibili）无任何隶属、合作或背书关系">非官方 · v1.6.0</span>
     </div>
   </aside>
 
   <!-- 主区域 -->
   <main class="main">
+    <!-- 顶栏 -->
     <header class="topbar">
       <h1 id="pageTitle">仪表盘</h1>
       <div class="topbar-right">
@@ -176,6 +178,18 @@
     <section class="view" id="view-rooms">
       <div class="panel">
         <div class="panel-title">添加直播间</div>
+        <div class="onboard-card" id="onboardGuideCard" hidden>
+          <span class="onboard-card-badge">新手引导</span>
+          <div class="onboard-card-body">
+            <div class="onboard-card-title">第一次使用？三步开始录制</div>
+            <ol class="onboard-steps">
+              <li>在下方填入 B 站直播间号（直播间网址里那串数字），保存目录名可留空自动命名；</li>
+              <li>点「添加房间」，该房间的弹幕录制会自动开始；</li>
+              <li>之后在「仪表盘」看实时数据，在「录制文件」下载弹幕记录与单场战报。</li>
+            </ol>
+            <div class="onboard-card-tip">不确定填什么？也可以点上面的「从 B 站关注列表一键导入」批量添加。</div>
+          </div>
+        </div>
         <button class="follow-entry" id="btnImportFollowing" type="button"
                 title="读取 B 站关注列表，查看哪些关注主播正在开播，勾选后批量加入录制（需先在设置页填写 SESSDATA）">
           <span class="fe-badge" aria-hidden="true">
@@ -358,7 +372,27 @@
         <span class="st-hint" id="settingsTopHint"></span>
       </div>
 
+      <!-- 设置面板：基础与策略 -->
       <div class="settings-tabpanel active" data-panel="base">
+      <button class="follow-entry tour-entry" id="btnShowOnboarding" type="button"
+              title="清除引导记忆，重新从第一步播放新手分步教程">
+        <span class="fe-badge" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor" aria-hidden="true">
+            <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1.2 14.6h-2.4v-2.4h2.4v2.4zm2.5-7.5l-1 1c-.8.8-1.3 1.4-1.3 2.6h-2.4v-.6c0-1.2.5-2.2 1.4-3l1.3-1.3c.4-.4.7-1 .7-1.6a2.4 2.4 0 1 0-4.8 0H8a4.8 4.8 0 1 1 8.5 2.4z"/>
+          </svg>
+        </span>
+        <span class="fe-text">
+          <span class="fe-title">重新查看新手引导</span>
+          <span class="fe-sub">跟着分步教程走一遍全部功能，过程中会写入演示数据方便预览，随时可跳过</span>
+        </span>
+        <span class="fe-cta">
+          开始
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </span>
+      </button>
       <div class="settings-grid">
         <div class="panel">
           <div class="panel-title">凭证与数据目录</div>
@@ -459,6 +493,7 @@
       </div><!-- /settings-grid：基础与策略 -->
       </div><!-- /settings-tabpanel：base -->
 
+      <!-- 设置面板：视频直录 -->
       <div class="settings-tabpanel" data-panel="video">
         <div class="panel st-narrow">
           <div class="panel-title">视频直录 <span class="muted">附加功能，默认关闭</span></div>
@@ -509,6 +544,7 @@
         </div>
       </div><!-- /settings-tabpanel：video -->
 
+      <!-- 设置面板：弹幕样式 -->
       <div class="settings-tabpanel" data-panel="ds">
         <div class="panel">
           <div class="panel-title">弹幕样式 <span class="muted">控制旁挂 ASS 字幕与「导出弹幕版」的弹幕观感 · 独立即时保存（不进入下方统一保存）· 存于 config/danmaku_style.json，也可直接编辑该文件</span></div>
@@ -605,6 +641,7 @@
         </div>
       </div><!-- /settings-tabpanel：ds -->
 
+      <!-- 设置面板：AI 解读 -->
       <div class="settings-tabpanel" data-panel="ai">
         <div class="panel st-narrow">
           <div class="panel-title">AI 高能解读 <span class="muted">可选项 · OpenAI 兼容接口</span></div>
@@ -680,6 +717,7 @@
         </div>
       </div><!-- /settings-tabpanel：ai -->
 
+      <!-- 设置面板：关心名单 -->
       <div class="settings-tabpanel" data-panel="cared">
         <div class="panel">
           <div class="panel-title">关心用户名单 <span class="muted">后处理去重时这些用户的弹幕全部保留 · 独立即时保存</span></div>
@@ -702,6 +740,7 @@
         </div>
       </div><!-- /settings-tabpanel：cared -->
 
+      <!-- 设置面板：战报样式 -->
       <div class="settings-tabpanel" data-panel="theme">
         <div class="panel">
           <div class="panel-title">战报样式 <span class="muted">配色 / 字体 / 排版 / 内容区块 · 保存后重新生成战报即生效（存于 config/report_theme.json，也可直接编辑该文件）· 独立即时保存</span></div>
@@ -999,5 +1038,7 @@
 </div>
 
 <div class="toast-wrap" id="toastWrap"></div>
-<script src="/pulse-strip.js?v=4"></script>
-<script src="/app.js?v=67"></script>
+<!-- 脚本同样带 ?v=N 防缓存，改对应 js 后把 N 加一 -->
+<script src="/onboarding.js?v=5"></script>
+<script src="/pulse-strip.js?v=8"></script>
+<script src="/app.js?v=75"></script>

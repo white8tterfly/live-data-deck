@@ -1,4 +1,6 @@
-/* 弹幕墙 Web UI —— 原生 JS，无构建步骤 */
+/* 弹幕墙主脚本：原生 JS 无构建，负责整个单页 UI（视图路由 / WebSocket 事件分发 /
+   仪表盘房间卡增量渲染 / 实时弹幕 / 录制文件与高能时间轴 / 设置与样式面板 / 战报与数据分析）。
+   以经典脚本加载，顶层函数（showView / navTo / openReport 等）直接挂到全局，供 onboarding.js 等模块调用。 */
 'use strict';
 
 /* 主题尽早兜底：与 index.html 内联引导脚本同逻辑（内联脚本被某些预览环境拦截时生效，
@@ -31,7 +33,8 @@ const state = {
   exportTimer: null, // 弹幕版导出进度轮询句柄
 };
 
-/* ---------------- 工具 ---------------- */
+/* 工具 */
+/* 数值 / 时间 / 大小 / HTML 转义格式化助手 */
 const fmt = {
   n: (v) => (Number(v) || 0).toLocaleString('zh-CN'),
   hms: (ts) => ts ? new Date(ts * 1000).toTimeString().slice(0, 8) : '--:--:--',
@@ -62,7 +65,8 @@ function toast(msg, kind = 'info', ms = 3200) {
   setTimeout(() => el.remove(), ms);
 }
 
-/* ---------------- 日 / 夜主题 ---------------- */
+/* 日 / 夜主题 */
+/* 读写文档根 data-theme；setTheme 同时把选择记忆到 ldd-theme */
 function currentTheme() {
   return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
 }
@@ -80,7 +84,7 @@ function setTheme(theme) {
   });
 })();
 
-/* ---------------- C01 全屏监控模式（#monitor，供 C03 复用） ---------------- */
+/* 全屏监控模式 */
 function enterMonitor() {
   document.body.classList.add('monitor-mode');
   stopDsPreview();
@@ -110,7 +114,8 @@ function exitMonitor() {
   if (location.hash === '#monitor') enterMonitor();
 })();
 
-/* ---------------- 侧栏收缩 ---------------- */
+/* 侧栏收缩 */
+/* 折叠 / 展开侧栏，记忆到 ldd-sidebar-collapsed */
 function toggleSidebar() {
   const collapsed = document.body.classList.toggle('sidebar-collapsed');
   localStorage.setItem('ldd-sidebar-collapsed', collapsed ? '1' : '0');
@@ -124,6 +129,7 @@ function toggleSidebar() {
   }
 })();
 
+/* fetch 封装：请求体自动 JSON 化，非 2xx 抛 Error(detail)，204 返回 null */
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -138,11 +144,12 @@ async function api(path, opts = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-/* ---------------- 视图路由 ---------------- */
+/* 视图路由 */
 const TITLES = { dashboard: '仪表盘', stream: '实时弹幕', rooms: '房间管理',
                  files: '录制文件', analysis: '数据分析',
                  logs: '运行日志', settings: '设置' };
 
+/* 切换主视图：更新导航高亮与页面标题，并按视图触发对应渲染 */
 function showView(name) {
   state.view = name;
   $$('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.view === name));
@@ -195,8 +202,9 @@ document.addEventListener('click', (e) => {
   if (go) navTo(go.dataset.goto);
 });
 
-/* ---------------- WebSocket ---------------- */
+/* WebSocket */
 let ws = null, wsBackoff = 1000;
+/* 连接 /api/ws，断线按退避重连；收到的消息转发给 onEvent */
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/api/ws`);
@@ -218,6 +226,7 @@ function connectWS() {
   ws.onerror = () => ws && ws.close();
 }
 
+/* WebSocket 事件分发：snapshot / room_state / danmaku / popularity / log / video */
 function onEvent(type, data) {
   if (type === 'snapshot' || type === 'state') { applyState(data); return; }
   if (type === 'room_state') { upsertRoom(data); return; }
@@ -271,6 +280,7 @@ function onEvent(type, data) {
   }
 }
 
+/* 用 /api/state 快照刷新全局 state，并重渲染当前可见视图 */
 function applyState(s) {
   state.rooms = s.rooms || [];
   state.totals = s.totals || {};
@@ -287,6 +297,7 @@ function applyState(s) {
   if ($('#view-rooms').classList.contains('active')) renderRoomTable();
 }
 
+/* 单房间增量更新（room_state 事件），并刷新当前可见视图 */
 function upsertRoom(rt) {
   if (!rt || !rt.room_id) return;
   const idx = state.rooms.findIndex((r) => r.room_id === rt.room_id);
@@ -301,7 +312,8 @@ function upsertRoom(rt) {
   if ($('#view-rooms').classList.contains('active')) renderRoomTable();
 }
 
-/* ---------------- 开播系统通知 ---------------- */
+/* 开播系统通知 */
+/* 申请系统通知权限；未授予时提示并返回 false */
 async function ensureNotifyPermission() {
   if (!('Notification' in window)) {
     toast('当前浏览器不支持系统通知', 'warn', 4000);
@@ -320,6 +332,7 @@ async function ensureNotifyPermission() {
   return true;
 }
 
+/* 弹出开播系统通知，点击可跳转直播间，20 秒后自动关闭 */
 function fireLiveNotification(r) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const name = r.anchor_name || r.vup || r.room_id;
@@ -339,7 +352,7 @@ function fireLiveNotification(r) {
   setTimeout(() => { try { n.close(); } catch { /* noop */ } }, 20000);
 }
 
-/* ---------------- 仪表盘 ---------------- */
+/* 仪表盘 */
 const PHASE = {
   recording: ['recording', '直播中'],
   connecting: ['connecting', '连接中'],
@@ -356,9 +369,14 @@ const PHASE_TITLES = {
 };
 const QN_LABELS = { 10000: '原画', 400: '蓝光', 250: '超清', 150: '高清', 80: '流畅' };
 
+/* 刷新顶部指标卡与全局状态胶囊 */
 function renderStats(s) {
+  // 快照每 5s 推送一次；仅当数值真正变化时才回放一次高亮，
+  // 否则数字会每 5s 无条件闪一次、整页周期性闪烁（用户反馈）
   const flash = (el, val) => {
-    el.textContent = fmt.n(val);
+    const text = fmt.n(val);
+    if (el.textContent === text) return;
+    el.textContent = text;
     el.classList.remove('flash');
     void el.offsetWidth;
     el.classList.add('flash');
@@ -388,27 +406,29 @@ function renderStats(s) {
   }
 }
 
+/* 生成仪表盘房间卡 HTML：直播中为详细卡，未开播为紧凑单行卡 */
 function roomCard(r) {
   const [cls, label] = PHASE[r.phase] || PHASE.stopped;
   const phaseTitle = PHASE_TITLES[r.phase] || '';
   const c = r.counters || {};
 
-  const item = (k, v, span) => {
+  // f：动态数值标记，供 patchRoomCard 就地刷新（结构未变时不重建卡片）
+  const item = (k, v, span, f) => {
     const raw = String(v ?? '');
     return `<div class="rc-mi${span ? ' span2' : ''}"><span class="rc-k">${k}</span>`
-      + `<span class="rc-v" title="${fmt.esc(raw)}">${fmt.esc(raw)}</span></div>`;
+      + `<span class="rc-v"${f ? ` data-f="${f}"` : ''} title="${fmt.esc(raw)}">${fmt.esc(raw)}</span></div>`;
   };
 
   const grid = [];
   if (r.running) {
-    grid.push(item('运行', fmt.dur(r.uptime_sec)));
-    if (r.host_count) grid.push(item('节点', `${r.host_index}/${r.host_count}`));
-    if (r.retries) grid.push(item('重连', r.retries));
-    grid.push(item('弹幕速率', `${r.rate_per_min} 条/分`));
+    grid.push(item('运行', fmt.dur(r.uptime_sec), false, 'uptime'));
+    if (r.host_count) grid.push(item('节点', `${r.host_index}/${r.host_count}`, false, 'host'));
+    if (r.retries) grid.push(item('重连', r.retries, false, 'retries'));
+    grid.push(item('弹幕速率', `${r.rate_per_min} 条/分`, false, 'rate'));
     if (r.popularity_now) {
       const popVal = fmt.n(r.popularity_now)
         + (r.popularity_peak ? `（峰 ${fmt.n(r.popularity_peak)}）` : '');
-      grid.push(item('人气', popVal, true));
+      grid.push(item('人气', popVal, true, 'pop'));
     }
   }
   if (r.current_file) {
@@ -422,7 +442,7 @@ function roomCard(r) {
   let videoLine = '';
   if (r.video_active) {
     videoLine = `<div class="rc-video on">🎥 <b>视频录制中</b> · ${QN_LABELS[r.video_qn] || r.video_qn}
-      <span class="rc-video-sub">${fmt.size(r.video_bytes)} / ${fmt.dur(r.video_sec)}${r.video_segments > 1 ? ` / ${r.video_segments} 段` : ''}</span></div>`;
+      <span class="rc-video-sub" data-f="vsub">${fmt.size(r.video_bytes)} / ${fmt.dur(r.video_sec)}${r.video_segments > 1 ? ` / ${r.video_segments} 段` : ''}</span></div>`;
   } else if (r.record_video) {
     const armText = !state.settings.video_enabled
       ? '全局开关未开，开启后立即起录'
@@ -471,10 +491,10 @@ function roomCard(r) {
 
   const stats = showStats ? `
     <div class="rc-stats">
-      <div class="rc-stat"><b>${fmt.n(c.danmaku)}</b>弹幕</div>
-      <div class="rc-stat sc"><b>${fmt.n(c.super_chat)}</b>SC</div>
-      <div class="rc-stat"><b>${fmt.n(c.gift)}</b>礼物</div>
-      <div class="rc-stat"><b>${fmt.n(c.emoticon_skipped)}</b>纯表情过滤</div>
+      <div class="rc-stat"><b data-f="dm">${fmt.n(c.danmaku)}</b>弹幕</div>
+      <div class="rc-stat sc"><b data-f="sc">${fmt.n(c.super_chat)}</b>SC</div>
+      <div class="rc-stat"><b data-f="gift">${fmt.n(c.gift)}</b>礼物</div>
+      <div class="rc-stat"><b data-f="emo">${fmt.n(c.emoticon_skipped)}</b>纯表情过滤</div>
     </div>` : '';
 
   // 基于 room_id 生成负延迟，避免 WS 更新重建 DOM 时呼吸动画从头开始
@@ -508,9 +528,11 @@ function roomCard(r) {
   </div>`;
 }
 
-/* C01 脉冲条实例池与数据窗：按房间 id 复用，避免 WS 增量重渲染时重复创建 */
+/* 脉冲条实例池与数据窗：按房间 id 复用，避免 WS 增量重渲染时重复创建。
+   直播心电图起优先使用后端下发的近 60 分钟弹幕分钟桶（room.ecg.buckets），
+   新后端缺失该字段时回退到 rate_per_min 滑动窗，旧后端无需重启即可平滑降级 */
 const pulseStrips = new Map();      // roomId → PulseStrip
-const pulseHistory = new Map();     // roomId → number[]（弹幕计数滑动窗）
+const pulseHistory = new Map();     // roomId → number[]（rate_per_min 滑动窗，兜底）
 const PULSE_WINDOW = 60;
 
 function syncRoomPulses() {
@@ -521,14 +543,21 @@ function syncRoomPulses() {
     aliveIds.add(id);
     const room = state.rooms.find((r) => String(r.room_id) === String(id));
     if (!room) return;
-    const val = Number(room.rate_per_min) || 0;
-    let hist = pulseHistory.get(id) || [];
-    hist.push(val);
-    if (hist.length > PULSE_WINDOW) hist = hist.slice(-PULSE_WINDOW);
-    pulseHistory.set(id, hist);
+    const buckets = room.ecg && Array.isArray(room.ecg.buckets) ? room.ecg.buckets : null;
+    let vals;
+    if (buckets && buckets.length) {
+      vals = buckets.map((b) => Number(b.dm) || 0);
+    } else {
+      const val = Number(room.rate_per_min) || 0;
+      let hist = pulseHistory.get(id) || [];
+      hist.push(val);
+      if (hist.length > PULSE_WINDOW) hist = hist.slice(-PULSE_WINDOW);
+      pulseHistory.set(id, hist);
+      vals = hist;
+    }
     /* 归一化到 [0,1]：除以历史最大值，至少 1 防除零 */
-    const maxV = Math.max(1, ...hist);
-    const norm = hist.map((v) => v / maxV);
+    const maxV = Math.max(1, ...vals);
+    const norm = vals.map((v) => v / maxV);
     let strip = pulseStrips.get(id);
     const container = card.querySelector('.rc-pulse');
     if (!container) return;
@@ -536,6 +565,7 @@ function syncRoomPulses() {
       if (strip) strip.destroy();
       strip = new PulseStrip(container, {
         data: norm, mode: 'static', color: 'var(--sig-recording)',
+        srLabel: '近 60 分钟弹幕密度',
       });
       pulseStrips.set(id, strip);
     } else {
@@ -548,75 +578,140 @@ function syncRoomPulses() {
   }
 }
 
-/* 房间卡显示签名：影响卡片内容的关键字段拼接，用于增量 diff */
-function roomSig(r) {
-  const c = r.counters || {};
+/* 房间卡结构签名：只含影响卡片 DOM 结构的字段。
+   随时间变化的数值（运行时长/节点序号/重连次数/速率/人气/计数/视频大小与时长）不进签名，
+   改由 patchRoomCard 就地更新——否则快照每 5s 都会重建卡片，导致呼吸动画中断、脉冲条闪烁 */
+function roomStructSig(r) {
   return [
     r.phase, r.running, r.connected, r.live_status,
     r.anchor_name || r.vup, r.room_id, r.title,
-    r.current_file, r.host_index, r.host_count, r.retries,
-    r.rate_per_min, r.popularity_now, r.popularity_peak,
-    r.uptime_sec, r.last_error, r.video_active, r.record_video, r.notify,
-    c.danmaku, c.super_chat, c.gift, c.emoticon_skipped,
+    r.current_file, r.host_count ? 1 : 0, r.retries ? 1 : 0,
+    r.popularity_now ? 1 : 0, r.last_error,
+    r.video_active, r.video_qn, r.record_video, r.notify,
+    (state.settings && state.settings.video_enabled) ? 1 : 0,
   ].join('|');
 }
 
+/* 就地刷新卡片内的动态数值：结构未变时不重建 DOM，避免动画重启 */
+function patchRoomCard(card, r) {
+  const c = r.counters || {};
+  // setV 用于信息网格值（带回显 title），setT 用于纯文本节点
+  const setV = (f, text) => {
+    const el = card.querySelector(`[data-f="${f}"]`);
+    if (el && el.textContent !== text) { el.textContent = text; el.title = text; }
+  };
+  const setT = (f, text) => {
+    const el = card.querySelector(`[data-f="${f}"]`);
+    if (el && el.textContent !== text) el.textContent = text;
+  };
+  if (r.running) {
+    setV('uptime', fmt.dur(r.uptime_sec));
+    if (r.host_count) setV('host', `${r.host_index}/${r.host_count}`);
+    if (r.retries) setV('retries', String(r.retries));
+    setV('rate', `${r.rate_per_min} 条/分`);
+    if (r.popularity_now) {
+      setV('pop', fmt.n(r.popularity_now)
+        + (r.popularity_peak ? `（峰 ${fmt.n(r.popularity_peak)}）` : ''));
+    }
+  }
+  setT('dm', fmt.n(c.danmaku));
+  setT('sc', fmt.n(c.super_chat));
+  setT('gift', fmt.n(c.gift));
+  setT('emo', fmt.n(c.emoticon_skipped));
+  if (r.video_active) {
+    setT('vsub', `${fmt.size(r.video_bytes)} / ${fmt.dur(r.video_sec)}`
+      + (r.video_segments > 1 ? ` / ${r.video_segments} 段` : ''));
+  }
+}
+
+/* 按目标顺序就地校正子节点：位置一致的节点不做任何 DOM 操作，
+   避免摘下来再挂回去导致 CSS 动画（呼吸边框）中断重启 */
+function reconcileChildren(parent, desired) {
+  for (let i = 0; i < desired.length; i++) {
+    const el = desired[i];
+    if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
+  }
+  while (parent.children.length > desired.length) parent.removeChild(parent.lastElementChild);
+}
+
+/* 按 room_id 复用的卡片节点池：值不随快照重建，动画才能跨快照连续 */
+const groupEls = new Map();   // groupKey → { root, body, count }
+const cardEls = new Map();    // roomId(String) → { el, sig }
+
+/* 渲染仪表盘房间网格：按 room_id 复用节点并就地校正顺序，避免 CSS 动画重启 */
 function renderRoomGrid() {
   const grid = $('#roomGrid');
   const empty = $('#dashboardEmpty');
-  if (!state.rooms.length) { grid.innerHTML = ''; empty.hidden = false; syncRoomPulses(); return; }
+  if (!state.rooms.length) {
+    grid.innerHTML = '';
+    groupEls.clear();
+    cardEls.clear();
+    empty.hidden = false;
+    syncRoomPulses();
+    return;
+  }
   empty.hidden = true;
 
   // 直播中在前、未开播/未运行在后；组内保持原有顺序
-  const live = state.rooms.filter((r) => r.phase === 'recording');
-  const idle = state.rooms.filter((r) => r.phase !== 'recording');
-
-  // 增量更新：按 room_id 复用已有卡片 DOM，签名相同则跳过重建
-  // 避免 5s state 推送时全量重建导致脉冲条闪烁、呼吸动画打断
   const groups = [
-    { key: 'live', label: '直播中', rooms: live },
-    { key: 'idle', label: '未开播', rooms: idle },
+    { key: 'live', label: '直播中', rooms: state.rooms.filter((r) => r.phase === 'recording') },
+    { key: 'idle', label: '未开播', rooms: state.rooms.filter((r) => r.phase !== 'recording') },
   ].filter((g) => g.rooms.length);
 
-  // 收集现有卡片，按 room_id 索引
-  const existing = new Map();
-  grid.querySelectorAll('.room-card[data-room-id]').forEach((el) => {
-    existing.set(el.dataset.roomId, el);
-  });
-
-  const frag = document.createDocumentFragment();
+  const wanted = new Set();
+  const roots = [];
   groups.forEach((g) => {
-    const heading = document.createElement('div');
-    heading.className = `room-group ${g.key}`;
-    heading.dataset.group = g.key;
-    const h = document.createElement('div');
-    h.className = 'rg-head';
-    h.innerHTML = `<i class="rg-dot ${g.key}"></i>${g.label}`
-      + `<span class="rg-count">${g.rooms.length}</span>`;
-    heading.appendChild(h);
-    const body = document.createElement('div');
-    body.className = 'room-grid';
+    let ge = groupEls.get(g.key);
+    if (!ge) {
+      const root = document.createElement('div');
+      root.className = `room-group ${g.key}`;
+      root.dataset.group = g.key;
+      const head = document.createElement('div');
+      head.className = 'rg-head';
+      head.innerHTML = `<i class="rg-dot ${g.key}"></i>${g.label}<span class="rg-count"></span>`;
+      const body = document.createElement('div');
+      body.className = 'room-grid';
+      root.appendChild(head);
+      root.appendChild(body);
+      ge = { root, body, count: head.querySelector('.rg-count') };
+      groupEls.set(g.key, ge);
+    }
+    // 计数未变时不要写 textContent：赋同值也会替换文本节点产生 DOM 变动
+    if (ge.count.textContent !== String(g.rooms.length)) {
+      ge.count.textContent = String(g.rooms.length);
+    }
+    roots.push(ge.root);
+
+    const desired = [];
     g.rooms.forEach((r) => {
-      const sig = roomSig(r);
-      let card = existing.get(String(r.room_id));
-      if (card && card.dataset.sig === sig) {
-        // 数据未变，直接复用
-      } else {
+      const id = String(r.room_id);
+      wanted.add(id);
+      const sig = roomStructSig(r);
+      let entry = cardEls.get(id);
+      if (!entry || entry.sig !== sig) {
+        // 结构变化才重建该卡，且就地替换，不影响其它卡
         const tmp = document.createElement('div');
         tmp.innerHTML = roomCard(r);
-        card = tmp.firstElementChild;
+        const el = tmp.firstElementChild;
+        if (entry && entry.el.parentNode) entry.el.replaceWith(el);
+        entry = { el, sig };
+        cardEls.set(id, entry);
       }
-      if (card) {
-        card.dataset.sig = sig;
-        body.appendChild(card);
-      }
+      patchRoomCard(entry.el, r);
+      desired.push(entry.el);
     });
-    heading.appendChild(body);
-    frag.appendChild(heading);
+    reconcileChildren(ge.body, desired);
   });
 
-  grid.innerHTML = '';
-  grid.appendChild(frag);
+  // 清理已消失的分组容器与已删除房间的卡片节点
+  for (const [key, ge] of groupEls) {
+    if (!groups.some((x) => x.key === key)) { ge.root.remove(); groupEls.delete(key); }
+  }
+  for (const [id, entry] of cardEls) {
+    if (!wanted.has(id)) { entry.el.remove(); cardEls.delete(id); }
+  }
+  reconcileChildren(grid, roots);
+
   syncRoomPulses();
 }
 
@@ -636,7 +731,8 @@ $('#roomGrid').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
-/* ---------------- 房间管理 ---------------- */
+/* 房间管理 */
+/* 渲染房间管理表格 */
 function renderRoomTable() {
   const tbody = $('#roomTable');
   $('#roomCount').textContent = state.rooms.length ? `共 ${state.rooms.length} 间` : '';
@@ -713,7 +809,12 @@ $('#btnAddRoom').addEventListener('click', async () => {
     toast(`房间 ${room_id} 已添加${enabled ? '，弹幕录制已开始' : ''}`
       + (record_video ? '；已勾选该房间视频直录（全局开关开启时生效）' : '')
       + (notify ? '；开播时将弹系统通知提醒' : ''), 'ok');
+    if (window.LDDOnboarding) LDDOnboarding.notifyRoomAdded();
   } catch (err) { toast(err.message, 'err'); }
+});
+
+$('#btnShowOnboarding').addEventListener('click', () => {
+  if (window.LDDOnboarding) { LDDOnboarding.reset(); LDDOnboarding.start({ force: true }); }
 });
 
 $('#roomTable').addEventListener('click', async (e) => {
@@ -782,7 +883,7 @@ $('#roomTable').addEventListener('change', async (e) => {
   }
 });
 
-/* ---------------- 房间级录制设置 ---------------- */
+/* 房间级录制设置 */
 // 画质档位与后端 VIDEO_QN_CHOICES 保持一致
 const VIDEO_QN_OPTIONS = [
   [10000, '原画'], [400, '蓝光'], [250, '超清'], [150, '高清'], [80, '流畅'],
@@ -825,6 +926,7 @@ function roomOverrideCount(r) {
 
 const roomCfg = { roomId: null, draft: {} };
 
+/* 打开房间级设置弹窗：草稿为该房间 overrides 的深拷贝，未设项补 null */
 function openRoomCfg(roomId) {
   const r = state.rooms.find((x) => x.room_id === roomId);
   if (!r) return;
@@ -840,6 +942,7 @@ function openRoomCfg(roomId) {
 
 function closeRoomCfg() { $('#roomCfgMask').hidden = true; }
 
+/* 生成房间设置正文：三态覆盖项分组 + 画质下拉 */
 function renderRoomCfgBody(r) {
   const s = state.settings || {};
   const esc = fmt.esc;
@@ -895,6 +998,7 @@ function renderRoomCfgBody(r) {
     </div>`;
 }
 
+/* 绑定三态按钮：只改该键草稿并重绘这一行，保证选中态与隐私警示同步 */
 function bindRoomCfgBody() {
   // 三态分段按钮
   $('#roomCfgBody').querySelectorAll('[data-tri]').forEach((box) => {
@@ -929,6 +1033,7 @@ function bindRoomCfgBody() {
   });
 }
 
+/* 保存房间覆盖项；resetAll=true 表示全部重置为跟随全局 */
 async function saveRoomCfg(resetAll) {
   const overrides = resetAll
     ? Object.fromEntries(ROOM_OVR_KEYS.map((k) => [k, null]))
@@ -954,13 +1059,14 @@ $('#roomCfgMask').addEventListener('click', (e) => {
   if (e.target.id === 'roomCfgMask') closeRoomCfg();
 });
 
-/* ---------------- B 站关注列表导入 ---------------- */
+/* B 站关注列表导入 */
 const followState = {
   items: [], loaded: false, loading: false, selected: new Set(),
   page: 0, total: 0, totalPage: 0, hasMore: false,
   loadingMore: false, moreError: '',
 };
 
+/* 按搜索词 / 只看直播中 / 隐藏已添加 过滤关注列表 */
 function followVisible() {
   const q = $('#followSearch').value.trim().toLowerCase();
   const liveOnly = $('#followLiveOnly').checked;
@@ -975,12 +1081,14 @@ function followVisible() {
   });
 }
 
+/* 关注列表项的开播状态徽标 */
 function followBadge(it) {
   if (it.live_status === 1) return '<span class="badge recording">直播中</span>';
   if (it.live_status === 2) return '<span class="badge connecting">轮播中</span>';
   return '<span class="badge stopped">未开播</span>';
 }
 
+/* 同步底栏：已选计数、确认按钮与「选中直播中」按钮的可用状态 */
 function syncFollowFoot(list) {
   const selectable = list.filter((i) => !i.added);
   const sel = followState.selected.size;
@@ -991,6 +1099,7 @@ function syncFollowFoot(list) {
     !selectable.some((i) => i.live_status === 1);
 }
 
+/* 渲染关注导入弹窗列表：加载中 / 空 / 筛选无结果 / 正常列表 */
 function renderFollow() {
   const box = $('#followContent');
   if (followState.loading) {
@@ -1046,6 +1155,7 @@ function renderFollow() {
   renderFollowMore();
 }
 
+/* 渲染底部的「加载更多 / 重试 / 已全部加载」条 */
 function renderFollowMore() {
   const bar = $('#followMoreBar');
   if (!bar) return;
@@ -1071,6 +1181,7 @@ function renderFollowMore() {
   bar.innerHTML = `<span class="muted">已全部加载（共 ${followState.total} 位）</span>`;
 }
 
+/* 拉取关注列表第一页，失败时把错误提示直接渲染进列表区 */
 async function loadFollow() {
   followState.loading = true;
   followState.loaded = false;
@@ -1103,6 +1214,7 @@ async function loadFollow() {
   }
 }
 
+/* 追加下一页关注列表，按 room_id 去重 */
 async function loadMoreFollow() {
   if (followState.loadingMore || followState.loading
       || !followState.hasMore) return;
@@ -1211,7 +1323,7 @@ $('#followConfirm').addEventListener('click', async () => {
   }
 });
 
-/* ---------------- 全局控制 ---------------- */
+/* 全局控制 */
 $('#btnStartAll').addEventListener('click', async () => {
   try {
     const r = await api('/api/start-all', { method: 'POST' });
@@ -1226,7 +1338,7 @@ $('#btnStopAll').addEventListener('click', async () => {
   catch (err) { toast(err.message, 'err'); }
 });
 
-/* ---------------- 实时弹幕 ---------------- */
+/* 实时弹幕 */
 /* 事件类型筛选：具体房间独立记忆；「全部房间」视图下的修改一次性同步到
    所有房间（key '' 同时作为未配置房间的全局兜底）；
    未配置过的房间默认四类全选，显式存空数组则表示该房间全部隐藏 */
@@ -1296,6 +1408,7 @@ function streamKindState() {
       !sets.every((s) => s.has(k)) && sets.some((s) => s.has(k)))),
   };
 }
+/* 把记忆的筛选配置回填到事件类型勾选框（多房间取交集，半选用 indeterminate） */
 function applyStreamProfile() {
   const { on, mixed } = streamKindState();
   streamKindInputs().forEach((i) => {
@@ -1303,6 +1416,7 @@ function applyStreamProfile() {
     i.indeterminate = mixed.has(i.value);
   });
 }
+/* 把当前勾选写回记忆：全部房间视图下同步到所有房间 */
 function persistStreamProfile() {
   const kinds = streamKindInputs().filter((i) => i.checked).map((i) => i.value);
   const ids = [...streamSel].map(String);
@@ -1316,6 +1430,7 @@ function persistStreamProfile() {
   }
   saveStreamProfiles();
 }
+/* 刷新筛选提示文案（随选中房间数变化） */
 function updateStreamFilterHint() {
   const hint = $('#streamFilterHint');
   const group = $('#streamKindFilters');
@@ -1337,8 +1452,9 @@ function updateStreamFilterHint() {
 applyStreamProfile();
 updateStreamFilterHint();
 
-/* ---- 房间多选下拉 ---- */
+/* 房间多选下拉 */
 let roomListSig = '';
+/* 渲染房间多选下拉，并顺带清理已删除房间的勾选与筛选记忆 */
 function renderRoomPicker() {
   const listEl = $('#streamRoomList');
   // 清理已删除房间的选择与筛选配置（房间列表尚未加载时不做清理，避免误删）
@@ -1373,6 +1489,7 @@ function renderRoomPicker() {
   updateStreamFilterHint();
 }
 
+/* 轻量同步多选下拉：各行勾选态、直播状态点、按钮摘要 */
 function syncPickerUI() {
   // 各行勾选态 + 直播状态点
   $('#streamRoomList').querySelectorAll('.mselect-opt').forEach((row) => {
@@ -1411,12 +1528,14 @@ function syncPickerUI() {
   }
 }
 
+/* 开 / 关房间多选面板，并同步 aria-expanded */
 function setRoomPickerOpen(open) {
   $('#streamRoomPanel').hidden = !open;
   $('#streamRoomBtn').classList.toggle('open', open);
   $('#streamRoomBtn').setAttribute('aria-expanded', String(open));
 }
 
+/* 房间勾选变化后：落盘记忆、刷新下拉、事件类型与弹幕列表 */
 function onRoomPickChange() {
   saveStreamSelection();
   syncPickerUI();
@@ -1425,11 +1544,13 @@ function onRoomPickChange() {
   rerenderStream();
 }
 
+/* 当前生效的弹幕筛选：事件类型集合 + 房间集合（空集合 = 全部房间） */
 function streamFilters() {
   const kinds = new Set(streamKindInputs().filter((i) => i.checked).map((i) => i.value));
   return { kinds, rooms: streamSel.size ? new Set(streamSel) : null };
 }
 
+/* 生成一条弹幕行 HTML；不匹配当前筛选时返回空串 */
 function streamRow(d) {
   const f = streamFilters();
   if (!f.kinds.has(d.kind)) return '';
@@ -1454,6 +1575,7 @@ function streamRow(d) {
 }
 
 let flushScheduled = false;
+/* 按帧合并弹幕刷新，避免每条消息都触发一次 DOM 写入 */
 function scheduleStreamFlush() {
   if (flushScheduled || !$('#view-stream').classList.contains('active')) return;
   flushScheduled = true;
@@ -1463,6 +1585,7 @@ function scheduleStreamFlush() {
   });
 }
 
+/* 把待渲染弹幕增量追加进列表（暂停时整表等到恢复播放再重建） */
 function flushStream() {
   if ($('#streamPause').checked) return;  // 暂停时等恢复后整表重建
   const list = $('#streamList');
@@ -1476,6 +1599,7 @@ function flushStream() {
   list.scrollTop = list.scrollHeight;
 }
 
+/* 整表重建弹幕列表（筛选或取消暂停后调用） */
 function rerenderStream() {
   const list = $('#streamList');
   const rows = state.stream.map(streamRow).filter(Boolean).slice(-500).join('');
@@ -1532,13 +1656,14 @@ document.addEventListener('keydown', (e) => {
 $('#streamClear').addEventListener('click', () => {
   state.stream = []; state.streamPending = []; rerenderStream();
 });
+/* 更新实时弹幕未读角标（超 99 显示 99+） */
 function updateBadge() {
   const b = $('#streamBadge');
   b.hidden = state.streamUnread === 0;
   b.textContent = state.streamUnread > 99 ? '99+' : state.streamUnread;
 }
 
-/* ---------------- 录制文件 ---------------- */
+/* 录制文件 */
 $$('#view-files .tabs .tab').forEach((t) => t.addEventListener('click', () => {
   $$('#view-files .tabs .tab').forEach((x) => x.classList.toggle('active', x === t));
   state.filesKind = t.dataset.kind;
@@ -1548,10 +1673,22 @@ $$('#view-files .tabs .tab').forEach((t) => t.addEventListener('click', () => {
   if (videoMode) loadVideos(); else loadFiles();
 }));
 
+/* 录制文件 / 数据分析列表是否已加载过：新手引导的演示数据写入或清除后按需刷新 */
+let filesLoaded = false, anaLoaded = false;
+
+/* 供新手引导调用：演示数据变化后刷新已加载过的列表，未加载过的页面不主动请求 */
+function refreshOnboardingLists() {
+  if (filesLoaded) loadFiles();
+  if (anaLoaded) loadAnaFiles();
+}
+window.LDDRefreshLists = refreshOnboardingLists;
+
+/* 拉取并渲染录制文件表格 */
 async function loadFiles() {
   try {
     state.files = await api('/api/files');
   } catch (err) { toast(err.message, 'err'); return; }
+  filesLoaded = true;
   const items = state.files[state.filesKind] || [];
   const empty = $('#filesEmpty');
   empty.hidden = items.length > 0;
@@ -1602,11 +1739,13 @@ $('#previewMask').addEventListener('click', (e) => {
   if (e.target.id === 'previewMask') $('#previewMask').hidden = true;
 });
 
-/* ---------------- 视频场次 ---------------- */
+/* 视频场次 */
+/* 拼接视频下载接口地址 */
 function videoDl(vup, file) {
   return `/api/videos/download?vup=${encodeURIComponent(vup)}&file=${encodeURIComponent(file)}`;
 }
 
+/* 拉取并渲染视频场次、散片，并维护导出进度轮询 */
 async function loadVideos() {
   let data;
   try {
@@ -1649,6 +1788,7 @@ async function loadVideos() {
     </tr>`).join('');
 }
 
+/* 生成一条视频场次行 HTML（含导出 / 字幕 / 秒切 / 删除等操作） */
 function videoRow(s) {
   const badges = [];
   if (s.ongoing) badges.push('<span class="badge recording">视频录制中</span>');
@@ -1769,9 +1909,11 @@ setInterval(() => {
   if ((state.videos.sessions || []).some((s) => s.ongoing)) loadVideos();
 }, 5000);
 
-/* ---------------- 高能时间轴 ---------------- */
-const hlCur = { vup: '', session: '', data: null, ai: null };
+/* 高能时间轴 */
+const hlCur = { vup: '', session: '', data: null, ai: null, ecg: null };
+let hlEcg = null;   // 弹窗内全幅 ECG 实例（切换场次时销毁重建）
 
+/* 打开高能时间轴弹窗：加载高能数据与既有 AI 结果后渲染 */
 async function openHighlights(vup, session) {
   hlCur.vup = vup;
   hlCur.session = session;
@@ -1787,6 +1929,7 @@ async function openHighlights(vup, session) {
   renderHighlights();
 }
 
+/* 拉取该场次已存 AI 解读结果，404 视为尚未解读（静默） */
 async function loadAiResult() {
   try {
     const q = `vup=${encodeURIComponent(hlCur.vup)}&session=${encodeURIComponent(hlCur.session)}`;
@@ -1799,6 +1942,7 @@ async function loadAiResult() {
   }
 }
 
+/* 触发 AI 高能解读；force=true 强制重新分析（会再次调用模型计费） */
 async function runAi(force) {
   if (!hlCur.data) { toast('弹幕数据尚未加载完成', 'warn'); return; }
   const btn = $('#hlAiRun');
@@ -1828,20 +1972,36 @@ async function runAi(force) {
   }
 }
 
+/* 并行拉取高能窗口与全场心电图；任一失败都不阻断另一项 */
 async function loadHighlights() {
   const win = $('#hlWindow').value;
   const top = $('#hlTopN').value;
   $('#hlBody').innerHTML = '<div class="muted">正在扫描弹幕/SC/人气数据…</div>';
-  try {
-    const q = `vup=${encodeURIComponent(hlCur.vup)}&session=${encodeURIComponent(hlCur.session)}`
-      + `&window_sec=${win}&top_n=${top}`;
-    hlCur.data = await api(`/api/videos/highlights?${q}`);
-    renderHighlights();
-  } catch (err) {
-    $('#hlBody').innerHTML = `<div style="color:var(--danger)">分析失败：${fmt.esc(err.message)}</div>`;
+  const q = `vup=${encodeURIComponent(hlCur.vup)}&session=${encodeURIComponent(hlCur.session)}`;
+  // 高能窗口与全幅心电图并行拉取；两者任一失败都不阻断另一项
+  // （典型：仅视频无弹幕场次，高能接口 404，但心电图仍应出图/给空态）
+  const [hlRes, ecgRes] = await Promise.allSettled([
+    api(`/api/videos/highlights?${q}&window_sec=${win}&top_n=${top}`),
+    api(`/api/videos/ecg?${q}`),
+  ]);
+  hlCur.ecg = ecgRes.status === 'fulfilled' ? ecgRes.value : null;
+  if (hlRes.status === 'fulfilled') {
+    hlCur.data = hlRes.value;
+  } else {
+    // 无高能数据时的安全兜底：保留心电图区块 + 显式空态，避免整弹窗失败
+    const ecg = hlCur.ecg || {};
+    hlCur.data = {
+      windows: [], timeline: [], totals: {},
+      window_sec: Number(win) || 60, top_n: Number(top) || 8,
+      jsonl_exists: !!(ecg.jsonl_exists),
+      note: `高能检测不可用：${hlRes.reason && hlRes.reason.message ? hlRes.reason.message : '无弹幕数据'}`,
+      ffmpeg: ecg.ffmpeg || { available: false },
+    };
   }
+  renderHighlights();
 }
 
+/* 生成弹幕密度柱状时间轴 HTML（柱高=窗口弹幕量，红框=入选高能窗口） */
 function hlTimeline(d) {
   const tl = d.timeline || [];
   if (!tl.length) return '';
@@ -1869,12 +2029,14 @@ function hlTimeline(d) {
     柱高=该窗口弹幕密度；金色柱含 SC；红色描边=入选高能窗口（共 ${tl.length} 个 ${d.window_sec}s 窗口）</div></div>`;
 }
 
+/* 时间戳 → MM-DD HH:MM */
 function fmtClock(ts) {
   const d = new Date(ts * 1000);
   const p = (n) => String(n).padStart(2, '0');
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/* 找到与该窗口起点对应的 AI picks 项（允许 ±1 秒误差） */
 function aiPickForStart(startTs) {
   const ai = hlCur.ai;
   if (!ai) return null;
@@ -1883,6 +2045,7 @@ function aiPickForStart(startTs) {
     (p) => Math.abs(Math.floor(Number(p.start_ts)) - target) <= 1) || null;
 }
 
+/* AI picks 卡片块（标题 / 分类 / 封面大字 / 建议切点 / 理由 / 口播） */
 function aiPickBlock(p) {
   if (!p) return '';
   return `<div class="ai-pick">
@@ -1897,6 +2060,7 @@ function aiPickBlock(p) {
   </div>`;
 }
 
+/* 秒切按钮 + 结果占位；无 ffmpeg 或缺少分段信息时返回空串 */
 function aiCutButton(p, seek, cutId, resId, label) {
   const ff = hlCur.data.ffmpeg && hlCur.data.ffmpeg.available;
   if (!ff || !seek || !seek.part) return '';
@@ -1909,6 +2073,7 @@ function aiCutButton(p, seek, cutId, resId, label) {
     <span class="hl-cut-result" id="${resId}"></span>`;
 }
 
+/* AI 解读结果汇总框（整场总结 + 高能点排行） */
 function aiSummaryBox() {
   const ai = hlCur.ai;
   if (!ai) return '';
@@ -1930,6 +2095,7 @@ function aiSummaryBox() {
   </div>`;
 }
 
+/* AI 补漏窗口卡片（规则密度信号未覆盖到的片段） */
 function aiExtraCards() {
   const ai = hlCur.ai;
   const wins = (ai && ai.extra_windows) || [];
@@ -1969,8 +2135,95 @@ function aiExtraCards() {
       🤖 AI 补漏窗口（规则密度信号未覆盖，共 ${wins.length} 个）</div>${cards}`;
 }
 
+/* 全场心电图区块 HTML（含图例、定位区与缺失信号提示） */
+function ecgBlock() {
+  const e = hlCur.ecg;
+  if (!e) return '';
+  const t = e.totals || {};
+  const MISS = { danmaku: '弹幕', super_chat: 'SC', gift: '金礼物', popularity: '人气' };
+  const missing = (e.missing || []).map((k) => MISS[k] || k);
+  const n = (e.series || []).length;
+  let meta;
+  if (!n) {
+    meta = e.note || '本场无可用信号，无法绘制心电图。';
+  } else if (e.downsampled) {
+    meta = `全场次 ${e.raw_points} 个 ${e.bucket_sec}s 桶 → 峰值保持下采样为 ${n} 点（每组 ${e.group_sec}s）`
+      + ` · 弹幕峰值 ${fmt.n(t.dm_peak)}/分 · SC ${fmt.n(t.super_chat)} 条 ¥${fmt.n(t.sc_amount)}`
+      + ` · 金礼物 ${fmt.n(t.gift)} 件`;
+  } else {
+    meta = `${n} 个 ${e.bucket_sec}s 桶 · 弹幕峰值 ${fmt.n(t.dm_peak)}/分`
+      + ` · SC ${fmt.n(t.super_chat)} 条 ¥${fmt.n(t.sc_amount)} · 金礼物 ${fmt.n(t.gift)} 件`;
+  }
+  return `<div class="panel-title" style="font-size:14px;margin:14px 0 6px">本场心电图</div>
+    <div id="hlEcg"></div>
+    ${n ? `<div class="ecg-legend">
+      <span><i style="background:var(--sig-level)"></i>弹幕密度</span>
+      <span><i style="background:var(--sig-peak)"></i>SC 尖峰（高度=金额对数）</span>
+      <span><i style="background:var(--sig-blocked)"></i>金礼物粒子</span>
+      <span><i style="background:var(--sig-armed);opacity:.5"></i>人气（底面积）</span>
+      <span><i style="background:var(--sig-recording);opacity:.35"></i>高能窗口</span>
+    </div>` : ''}
+    <div id="hlEcgSeek"></div>
+    <div class="hint" style="margin:2px 0 10px">${fmt.esc(meta)}
+      ${missing.length ? `<span class="ecg-tip-off"> · 本场缺失信号：${fmt.esc(missing.join(' / '))}（对应图层不绘制）</span>` : ''}
+      ${n ? ' · 滚轮缩放、拖拽平移、单击定位到该时刻' : ''}</div>`;
+}
+
+/* 挂载/重建弹窗内全幅 ECG（数据与高能窗口来自 hlCur） */
+function mountEcg() {
+  if (hlEcg) { hlEcg.destroy(); hlEcg = null; }
+  const box = $('#hlEcg');
+  if (!box) return;
+  const e = hlCur.ecg;
+  if (!e || !(e.series || []).length) return;
+  hlEcg = new EcgStrip(box, { onSeek: onEcgSeek });
+  hlEcg.setData({
+    series: e.series,
+    segments: e.segments,
+    bucket_sec: e.bucket_sec,
+    group_sec: e.group_sec,
+    totals: e.totals,
+    windows: (hlCur.data.windows || []),
+  });
+}
+
+/* 单击 ECG → 定位到该时刻：复制 VLC/ffplay 命令；有 ffmpeg 时可无损秒切该 60 秒 */
+async function onEcgSeek(point) {
+  const box = $('#hlEcgSeek');
+  if (!box) return;
+  box.innerHTML = '<div class="muted">正在定位该时刻…</div>';
+  try {
+    const r = await api('/api/videos/ecg-seek', {
+      method: 'POST',
+      body: { vup: hlCur.vup, session: hlCur.session, ts: point.ts },
+    });
+    const cmds = r.commands || {};
+    const ff = r.ffmpeg && r.ffmpeg.available;
+    const s = Math.round(r.start_sec);
+    const e = Math.round(r.end_sec);
+    box.innerHTML = `<div class="ecg-seek-box">
+      <div class="ecg-seek-line"><b>已定位 ${fmtClock(point.ts)}</b>
+        <span class="muted">${r.part ? fmt.esc(r.part) + ' · ' : ''}片段 ${s}–${e} 秒
+          ${ff ? ' · 可无损秒切' : ' · 无 ffmpeg，复制命令跳转'}</span></div>
+      <div class="hl-actions">
+        <button class="btn btn-sm" data-cmd="${encodeURIComponent(cmds.vlc || '')}">复制 VLC 跳转</button>
+        <button class="btn btn-sm" data-cmd="${encodeURIComponent(cmds.ffplay || '')}">复制 ffplay 跳转</button>
+        ${ff && r.part ? `<button class="btn btn-sm btn-primary" data-cut="ecg" data-resid="hlEcgCut"
+            data-vup="${fmt.esc(hlCur.vup)}" data-session="${fmt.esc(hlCur.session)}"
+            data-part="${fmt.esc(r.part)}" data-ss="${r.start_sec}" data-to="${r.end_sec}">
+            ffmpeg 无损秒切这 60 秒</button>
+          <span class="hl-cut-result" id="hlEcgCut"></span>` : ''}
+      </div>
+    </div>`;
+  } catch (err) {
+    box.innerHTML = `<div class="muted">定位失败：${fmt.esc(err.message)}</div>`;
+  }
+}
+
+/* 渲染高能弹窗正文：汇总 / AI 解读 / 心电图 / 时间轴 / 高能卡片 */
 function renderHighlights() {
   const d = hlCur.data;
+  if (!d) return;   // 数据尚未就绪（如 AI 完成事件早于高能数据加载）时静默跳过
   const ff = d.ffmpeg && d.ffmpeg.available;
   const t = d.totals || {};
   const head = `
@@ -1984,6 +2237,7 @@ function renderHighlights() {
     ${d.jsonl_exists ? '' : '<div class="warn-box" style="margin:8px 0">未找到同日弹幕 jsonl，高能检测无数据可用（视频本身不受影响）。</div>'}
     ${d.note ? `<div class="muted">${fmt.esc(d.note)}</div>` : ''}
     ${aiSummaryBox()}
+    ${ecgBlock()}
     ${hlTimeline(d)}`;
   const cards = (d.windows || []).map((w, i) => {
     const seek = w.seek || {};
@@ -2048,11 +2302,16 @@ function renderHighlights() {
         <div class="hint">高能窗口所在分段：${segRows || '无'}</div>
         <div class="hint">完整分段、弹幕字幕（ASS 文件）与已切片段请在视频列表行内下载；「导出弹幕版」烧录按钮也在列表页。</div>
       </div>`;
+  mountEcg();
 }
 
-$('#hlClose').addEventListener('click', () => { $('#hlMask').hidden = true; });
+function closeHighlights() {
+  $('#hlMask').hidden = true;
+  if (hlEcg) { hlEcg.destroy(); hlEcg = null; }
+}
+$('#hlClose').addEventListener('click', closeHighlights);
 $('#hlMask').addEventListener('click', (e) => {
-  if (e.target.id === 'hlMask') $('#hlMask').hidden = true;
+  if (e.target.id === 'hlMask') closeHighlights();
 });
 $('#hlReanalyze').addEventListener('click', loadHighlights);
 $('#hlAiRun').addEventListener('click', () => runAi(false));
@@ -2111,14 +2370,17 @@ $('#hlBody').addEventListener('click', async (e) => {
   }
 });
 
-/* ---------------- 日志 ---------------- */
+/* 日志 */
+/* 当前勾选的日志级别集合 */
 function logLevels() {
   return new Set($$('.terminal-bar input:checked').map((i) => i.dataset.level));
 }
+/* 单条日志行 HTML */
 function logLineHtml(d) {
   const lv = d.level === 'warning' ? 'warning' : d.level;
   return `<div class="log-line log-${lv}"><span class="log-time">${fmt.hms(d.ts)}</span> ${fmt.esc(d.msg)}</div>`;
 }
+/* 按级别过滤日志；rebuild=true 时整表重建 */
 function renderLogs(rebuild = false) {
   const levels = logLevels();
   const term = $('#logTerminal');
@@ -2127,6 +2389,7 @@ function renderLogs(rebuild = false) {
     term.scrollTop = term.scrollHeight;
   }
 }
+/* 追加一条日志行，超出 1000 行裁剪；仅当日志页可见时调用 */
 function appendLogLine(d) {
   if (!logLevels().has(d.level)) return;
   const term = $('#logTerminal');
@@ -2162,8 +2425,8 @@ document.addEventListener('click', async (e) => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
-/* ---------------- 设置 ---------------- */
-/* ------- 设置页子标签：切换 + 记忆 + 保存方式提示 ------- */
+/* 设置 */
+/* 设置页子标签 */
 const SETTINGS_TABS = ['base', 'video', 'ds', 'ai', 'cared', 'theme'];
 const SETTINGS_TAB_HINT = {
   base: '本页修改统一保存：有改动时底部出现保存条，离开页面会提醒',
@@ -2197,6 +2460,7 @@ $$('#settingsTabs .st-tab').forEach((b) =>
   try { switchSettingsTab(tab); } catch (e) { /* ignore */ }
 })();
 
+/* 用服务端设置值填充设置表单，并清除脏状态 */
 function fillSettings() {
   const s = state.settings;
   $('#sessTag').textContent = s.sessdata_set ? '已配置' : '未配置';
@@ -2241,8 +2505,9 @@ function fillSettings() {
   setSettingsDirty(false);
 }
 
-/* ------- 统一保存：脏状态 + 底部保存条 + 离开拦截 ------- */
+/* 设置页统一保存 */
 let settingsDirty = false;
+/* 设置脏状态开关：控制底部保存条的显隐 */
 function setSettingsDirty(v) {
   settingsDirty = !!v;
   const bar = $('#settingsDirtyBar');
@@ -2295,6 +2560,7 @@ function collectSettingsPatch() {
   return patch;
 }
 
+/* 提交设置补丁并保存；成功后用服务端返回值重置表单 */
 async function saveSettings() {
   $('#saveResult').textContent = '保存中…';
   try {
@@ -2324,7 +2590,7 @@ $('#toggleSess').addEventListener('click', () => {
   $('#toggleSess').textContent = show ? '显示' : '隐藏';
 });
 
-/* ------- SESSDATA：粘贴整段 Cookie 自动提取 ------- */
+/* SESSDATA 自动提取 */
 function extractSessdata(text) {
   const m = /(?:^|;\s*|^cookie:\s*)SESSDATA=([^;"'\s]+)/i.exec(text || '');
   if (!m) return '';
@@ -2344,27 +2610,32 @@ $('#setSess').addEventListener('paste', (e) => {
   toast('已从整段 Cookie 中自动提取 SESSDATA，记得点「保存设置」', 'ok');
 });
 
-/* ------- SESSDATA：B 站 App 扫码获取（后端代理，无需 F12）------- */
+/* SESSDATA 扫码登录 */
 const qrLogin = { key: '', timer: null, dead: false };
 
+/* 转义 HTML 特殊字符（扫码状态区拼接用） */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/* 设置扫码弹窗的状态文案与样式类 */
 function qrSetStatus(html, cls) {
   const el = $('#qrLoginStatus');
   el.className = 'qr-status' + (cls ? ' ' + cls : '');
   el.innerHTML = html;
 }
+/* 停止扫码轮询 */
 function qrStop() {
   qrLogin.dead = true;
   clearTimeout(qrLogin.timer);
 }
+/* 关闭扫码弹窗并停止轮询 */
 function qrClose() {
   $('#qrLoginMask').hidden = true;
   qrStop();
 }
+/* 申请二维码并启动扫码状态轮询 */
 async function qrStart() {
   clearTimeout(qrLogin.timer);
   qrLogin.key = '';
@@ -2391,6 +2662,7 @@ async function qrStart() {
     $('#qrLoginRefresh').hidden = false;
   }
 }
+/* 每 1.8 秒查询一次扫码状态；成功后回填 SESSDATA 并延后关闭弹窗 */
 function qrPollLoop() {
   qrLogin.timer = setTimeout(async () => {
     if (qrLogin.dead || $('#qrLoginMask').hidden) return;
@@ -2513,7 +2785,8 @@ $('#btnTestLlm').addEventListener('click', async () => {
   } catch (err) { out.textContent = '❌ ' + err.message; }
 });
 
-/* ---------------- 关心用户名单 ---------------- */
+/* 关心用户名单 */
+/* 拉取关心用户名单并渲染表格；返回 key 集合供分析页复用 */
 async function loadCared() {
   let list = [];
   try { list = (await api('/api/cared-users')).cared_users || []; }
@@ -2552,15 +2825,17 @@ $('#caredTable').addEventListener('click', async (e) => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
-/* ---------------- 战报样式 ---------------- */
+/* 战报样式 */
 let thData = null;
 
+/* 拉取战报样式；失败不阻断设置页其它功能 */
 async function loadTheme() {
   try { thData = await api('/api/report-theme'); }
   catch (err) { return; }  // 加载失败不阻断设置页其它功能
   fillTheme();
 }
 
+/* 规范化为大写 #RRGGBB（3 位缩写自动补全） */
 function normHex(v) {
   let s = String(v).trim();
   if (/^#[0-9a-fA-F]{3}$/.test(s)) {
@@ -2569,10 +2844,12 @@ function normHex(v) {
   return s.toUpperCase();
 }
 
+/* 校验是否为合法 #RGB / #RRGGBB */
 function validHex(v) {
   return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(v).trim());
 }
 
+/* 当前画布方向对应的元数据（宽度档位 / 每行卡片数等） */
 function thOriMeta() {
   const key = $('#thOrientation').value || 'portrait';
   return thData.meta.orientations.find((o) => o.key === key)
@@ -2614,6 +2891,7 @@ $('#thOrientation').addEventListener('change', () => {
   toast('已切换画布方向，宽度与每行卡片数换为该方向推荐值，可先「生成预览」查看', 'ok');
 });
 
+/* 用服务端战报样式填充表单 */
 function fillTheme() {
   const { theme, meta } = thData;
   $('#thColors').innerHTML = meta.colors.map((c) => `
@@ -2651,6 +2929,7 @@ function fillTheme() {
   $('#thResult').textContent = '';
 }
 
+/* 渲染战报区块顺序行：显隐开关 + 上移 / 下移 */
 function renderThSections() {
   const labels = Object.fromEntries(
     thData.meta.sections.map((s) => [s.key, s.label]));
@@ -2671,12 +2950,14 @@ function renderThSections() {
     </div>`).join('');
 }
 
+/* 把区块勾选态回写到 thData.theme，防止重排后丢失 */
 function syncSectionChecks() {
   $$('#thSections [data-th-sec]').forEach((cb) => {
     thData.theme['show_' + cb.dataset.thSec] = cb.checked;
   });
 }
 
+/* 表单 → 战报样式对象 */
 function collectTheme() {
   const t = { ...thData.theme };
   syncSectionChecks();
@@ -2782,6 +3063,7 @@ $('#btnThReset').addEventListener('click', async () => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
+/* 请求后端渲染样式预览图，展示并滚入视口 */
 async function genThPreview() {
   if ($$('#thColors .th-hex.bad').length) {
     return toast('存在不合法的颜色值，应为 #RRGGBB 格式', 'err');
@@ -2843,7 +3125,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !thZoomMask.hidden) closeThZoom();
 });
 
-/* ---------------- 弹幕样式（ASS 观感配置） ---------------- */
+/* 弹幕样式 */
 /* 必须用 var：恢复上次设置子标签的 IIFE（本文件中段）可能在本行求值前
    同步调用 startDsPreview()，let/const 会触发 TDZ 并中断整个脚本求值 */
 var dsData = null;
@@ -2860,6 +3142,7 @@ function dsPanelActive() {
   return !!(p && p.classList.contains('active'));
 }
 
+/* 拉取弹幕样式（整轮页面只拉一次）并填充表单，必要时补启预览 */
 async function loadDs() {
   if (!dsData) {   // 保存/恢复后本地即最新，整轮页面只拉一次
     try { dsData = await api('/api/danmaku-style'); }
@@ -2872,12 +3155,14 @@ async function loadDs() {
   if (dsPanelActive()) startDsPreview();
 }
 
+/* 用 meta 项填充下拉并选中指定值 */
 function dsFillSelect(sel, items, val) {
   sel.innerHTML = items.map((o) =>
     `<option value="${o.key}">${fmt.esc(o.label)}</option>`).join('');
   sel.value = String(val);
 }
 
+/* 用服务端弹幕样式填充表单 */
 function fillDs() {
   const { style, meta } = dsData;
   $$('input[name="dsCanvasMode"]').forEach((r) => {
@@ -2898,6 +3183,7 @@ function fillDs() {
   $('#dsScCard').checked = !!style.sc_card;
 }
 
+/* 表单 → 弹幕样式对象 */
 function collectDs() {
   const modeEl = $$('input[name="dsCanvasMode"]').find((r) => r.checked);
   const w = parseInt($('#dsCanvasW').value, 10);
@@ -2956,8 +3242,8 @@ $('#btnDsPreviewJump').addEventListener('click', () => {
   requestAnimationFrame(() => box.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 });
 
-/* ------- 实时预览：与后端同参数的迷你弹幕模拟 ------- */
-/* 预览画布比例跟随画布设置：自动 16:9，手动取手填宽高比（含竖屏） */
+/* 弹幕样式实时预览 */
+/* 把画布比例写进 CSS 变量：自动 16:9，手动取手填宽高比（含竖屏） */
 function dsApplyRatio(st) {
   let rw = 16, rh = 9;
   if (st.canvas_mode === 'manual' && st.canvas_w >= 320 && st.canvas_h >= 320) {
@@ -2968,6 +3254,7 @@ function dsApplyRatio(st) {
   box.style.setProperty('--ds-rh', String(rh));
 }
 
+/* 由预览框实际尺寸推算字号 / 行高 / 车道数 / 速度等几何参数 */
 function dsGeom(st) {
   const rect = $('#dsPreview').getBoundingClientRect();
   if (rect.width < 10 || rect.height < 10) return null;
@@ -2980,12 +3267,14 @@ function dsGeom(st) {
   return { W, H, S, LH, margin, n, v };
 }
 
+/* 生成 8 向描边阴影（模拟 ASS 描边观感） */
 function dsTextShadow(outline, S) {
   const p = Math.max(0.8, Number(outline) * S / 22);
   const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
   return dirs.map(([dx, dy]) => `${dx * p}px ${dy * p}px 0 #000`).join(',');
 }
 
+/* 预览定时器：生成滚动弹幕并维护车道占用，尺寸变化时重建车道 */
 function dsTick() {
   const st = collectDs();
   const g = dsGeom(st);
@@ -3036,6 +3325,7 @@ function dsTick() {
   if (Math.random() < 0.4) setTimeout(spawnOne, 240);
 }
 
+/* 应用静止示例的字号 / 颜色 / 阴影、固定弹幕与 SC 卡片等静态样式 */
 function applyDsStatic() {
   if (!dsData) return;
   const st = collectDs();
@@ -3077,6 +3367,7 @@ function applyDsStatic() {
   plain.style.textShadow = sh;
 }
 
+/* 启动弹幕预览定时器（重复调用无副作用） */
 function startDsPreview() {
   if (!dsData) return;
   applyDsStatic();
@@ -3084,6 +3375,7 @@ function startDsPreview() {
   dsTick();
   dsTimer = setInterval(dsTick, 650);
 }
+/* 停止预览定时器并清空在途弹幕 */
 function stopDsPreview() {
   if (dsTimer) { clearInterval(dsTimer); dsTimer = null; }
   $$('#dsPreview .ds-dm').forEach((el) => el.remove());
@@ -3109,7 +3401,7 @@ window.addEventListener('resize', () => {
   requestAnimationFrame(() => { dsResizeQueued = false; applyDsStatic(); });
 });
 
-/* ---------------- 数据分析 ---------------- */
+/* 数据分析 */
 const ana = {
   files: null,
   kind: 'records',
@@ -3118,22 +3410,27 @@ const ana = {
   caredSet: new Set(),
 };
 
+/* 去掉 live_ 前缀与 .jsonl 后缀，用于文件树展示 */
 function shortName(name) {
   return name.replace(/^live_/, '').replace(/\.jsonl$/, '');
 }
 
+/* 首次或再次进入分析页时加载文件树 */
 async function initAnalysisView() {
   $('#anaTabs').dataset.ready = '1';
   await loadAnaFiles();
 }
 
+/* 拉取文件列表并渲染分析文件树 */
 async function loadAnaFiles() {
   try {
     ana.files = await api('/api/files');
   } catch (err) { toast(err.message, 'err'); return; }
+  anaLoaded = true;
   renderFileTree();
 }
 
+/* 按主播分组渲染分析文件树，勾选态从 ana.sel 还原 */
 function renderFileTree() {
   const items = (ana.files && ana.files[ana.kind]) || [];
   const groups = {};
@@ -3157,6 +3454,7 @@ function renderFileTree() {
   updateSelCount();
 }
 
+/* 更新已选文件计数 */
 function updateSelCount() {
   $('#anaSelCount').textContent = `已选 ${ana.sel[ana.kind].size}`;
 }
@@ -3187,7 +3485,8 @@ $('#anaClear').addEventListener('click', () => {
   renderFileTree();
 });
 
-/* ---- 纯 SVG 柱状图 ---- */
+/* 纯 SVG 柱状图 */
+/* 纯 SVG 竖向柱状图，返回 SVG 字符串；opts.hot 高亮、opts.primary 主色 */
 function vBars(data, opts = {}) {
   if (!data.length) return '<div class="muted">暂无数据</div>';
   const W = 760, H = 178, padL = 38, padR = 6, padT = 18, padB = 26;
@@ -3223,6 +3522,7 @@ function vBars(data, opts = {}) {
             ${grid}${bars}</svg>`;
 }
 
+/* 横向排行条列表；opts.gold 用金色填充 */
 function hRows(items, opts = {}) {
   if (!items.length) return '<div class="muted">暂无数据</div>';
   const max = Math.max(1, ...items.map((i) => i.value));
@@ -3235,10 +3535,12 @@ function hRows(items, opts = {}) {
     </div>`).join('');
 }
 
+/* 单个指标卡 HTML */
 function card(v, l, cls = '') {
   return `<div class="ana-card ${cls}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
 }
 
+/* 提交所选文件做分析并渲染结果，同时刷新关心名单集合 */
 async function btnAnalyzeClick() {
   const paths = [...ana.sel[ana.kind]];
   if (!paths.length) return toast('请先勾选至少一个文件', 'warn');
@@ -3254,6 +3556,7 @@ async function btnAnalyzeClick() {
 }
 $('#btnAnalyze').addEventListener('click', btnAnalyzeClick);
 
+/* 渲染分析结果页：指标卡 + 时间轴 / 排行 / 高能时刻等图表 */
 function renderReport(d) {
   const t = d.totals;
   const spanTxt = t.span_sec >= 3600
@@ -3417,7 +3720,7 @@ $('#analysisReport').addEventListener('click', async (e) => {
   }
 });
 
-/* ---- 批量去重 ---- */
+/* 批量去重 */
 $('#btnBatchDedup').addEventListener('click', async () => {
   if (ana.kind !== 'records') return toast('房管处置存档文件不需要去重', 'warn');
   const all = (ana.files && ana.files.records) || [];
@@ -3438,9 +3741,10 @@ $('#btnBatchDedup').addEventListener('click', async () => {
   finally { btn.disabled = false; btn.textContent = '批量去重'; }
 });
 
-/* ---------------- 后处理去重弹窗 ---------------- */
+/* 后处理去重弹窗 */
 let dedupCur = null;
 
+/* 打开后处理去重弹窗并预览重复情况 */
 async function openDedup(kind, path, displayName) {
   dedupCur = { kind, path };
   $('#dedupTitle').textContent = '后处理去重 · ' + displayName;
@@ -3451,6 +3755,7 @@ async function openDedup(kind, path, displayName) {
   await dedupPreview();
 }
 
+/* 预览去重统计与刷屏样例（不落盘） */
 async function dedupPreview() {
   const w = Math.max(0, Number($('#dedupWindow').value) || 0);
   $('#dedupBody').innerHTML = '<div class="muted">正在分析…</div>';
@@ -3515,11 +3820,12 @@ $('#filesTable').addEventListener('click', (e) => {
   openDedup(state.filesKind, btn.dataset.dedup, btn.dataset.dedup.split(/[\\/]/).pop());
 });
 
-/* ---------------- 单场直播战报 ---------------- */
+/* 单场直播战报 */
 let reportCur = null;
 let reportMeta = null;
 let reportBlobUrl = null;
 
+/* 复位战报图片区：释放 blob、隐藏图片与下载按钮 */
 function resetReportImage() {
   if (reportBlobUrl) { URL.revokeObjectURL(reportBlobUrl); reportBlobUrl = null; }
   $('#reportImgWrap').hidden = true;
@@ -3532,10 +3838,12 @@ function resetReportImage() {
   gen.textContent = '生成 PNG 一页战报';
 }
 
+/* 去掉 Windows 文件名非法字符 */
 function safeFileName(s) {
   return String(s ?? '').replace(/[\\/:*?"<>|]/g, '_').trim() || '战报';
 }
 
+/* 打开单场战报弹窗并拉取本场汇总数据 */
 async function openReport(kind, path) {
   reportCur = { kind, path };
   reportMeta = null;
@@ -3616,11 +3924,37 @@ $('#filesTable').addEventListener('click', (e) => {
   openReport(state.filesKind, btn.dataset.report);
 });
 
-/* ---------------- 启动 ---------------- */
+/* 新手引导钩子：引导需要主动触发的动作集中在这里，供 onboarding.js 调用 */
+window.LDDTourHooks = {
+  openHighlights,
+  closeHighlights,
+  /* 在分析页跑一次演示分析：勾选第一个文件并点「开始分析」，返回被勾选的路径供引导还原 */
+  async runDemoAnalysis() {
+    if (state.view !== 'analysis') return null;
+    // 文件树还没渲染好就等一拍（演示数据写入到列表刷新之间有延迟）
+    for (let i = 0; i < 16; i += 1) {
+      if (ana.files && $('#anaFileTree input[data-path]')) break;
+      try { await loadAnaFiles(); } catch (e) { /* 列表拉取失败则继续等 */ }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const cb = $('#anaFileTree input[data-path]');
+    if (!cb) return null;
+    if (!cb.checked) {
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    $('#btnAnalyze').click();
+    return cb.dataset.path;
+  },
+};
+
+/* 启动 */
 (async function init() {
   try {
     const s = await api('/api/state');
     applyState(s);
+    // 新手引导：首次使用（无任何直播间）时跳转房间管理并展示引导卡
+    if (window.LDDOnboarding) LDDOnboarding.maybeAutoStart({ rooms: state.rooms });
     // 补发历史日志
     const r = await api('/api/logs?limit=300');
     state.logs = r.logs || [];
