@@ -318,6 +318,16 @@ body {
 .ws-dot.off { background: var(--danger); }
 .version { margin-left: auto; }
 
+/* 侧栏底部的退出入口：平时低调，悬停才转警示色（控制台隐藏后这是唯一的停机入口） */
+.foot-quit {
+  margin-left: 6px; padding: 2px 8px; border-radius: 6px;
+  font-family: inherit; font-size: 12px; line-height: 1.4;
+  color: var(--text-3); background: transparent;
+  border: 1px solid var(--border-soft); cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.foot-quit:hover { color: var(--danger); border-color: var(--danger); }
+
 /* 主区域 */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .topbar {
@@ -1848,7 +1858,7 @@ input[type="checkbox"]:checked::after { transform: translateX(16px); background:
 }
 @media (max-width: 860px) {
   .sidebar { width: 62px; padding: 16px 8px; }
-  .brand-text, .nav-item span, .nav-badge, .sidebar-foot span { display: none; }
+  .brand-text, .nav-item span, .nav-badge, .sidebar-foot span, .foot-quit { display: none; }
   .nav-item { justify-content: center; padding: 10px; }
   .brand { justify-content: center; padding: 0 0 16px; }
   .nav-item.active::before { left: -8px; }

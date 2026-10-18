@@ -129,6 +129,22 @@ function toggleSidebar() {
   }
 })();
 
+/* 退出服务：控制台隐藏后这是网页侧唯一的停机入口，二次确认后再发停机请求 */
+$('#btnShutdown').addEventListener('click', async () => {
+  if (!confirm('退出将停止所有录制并关闭后台服务，确定要退出吗？')) return;
+  try {
+    await api('/api/shutdown', { method: 'POST' });
+  } catch (e) {
+    toast(`退出失败：${e.message}`, 'err');
+    return;
+  }
+  serviceStopped = true;
+  if (ws) ws.close();
+  $('#wsDot').className = 'ws-dot off';
+  $('#wsText').textContent = '服务已停止';
+  toast('服务已停止，可以关闭本页面了', 'ok', 8000);
+});
+
 /* fetch 封装：请求体自动 JSON 化，非 2xx 抛 Error(detail)，204 返回 null */
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -204,6 +220,8 @@ document.addEventListener('click', (e) => {
 
 /* WebSocket */
 let ws = null, wsBackoff = 1000;
+/* 用户主动退出服务后置真：断线不再退避重连，页面停在「服务已停止」 */
+let serviceStopped = false;
 /* 连接 /api/ws，断线按退避重连；收到的消息转发给 onEvent */
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -219,6 +237,7 @@ function connectWS() {
   };
   ws.onclose = () => {
     $('#wsDot').className = 'ws-dot off';
+    if (serviceStopped) { $('#wsText').textContent = '服务已停止'; return; }
     $('#wsText').textContent = '已断开，重连中…';
     setTimeout(connectWS, Math.min(wsBackoff, 8000));
     wsBackoff *= 1.8;
