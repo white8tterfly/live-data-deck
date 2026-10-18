@@ -2610,8 +2610,8 @@ $('#setSess').addEventListener('paste', (e) => {
   toast('已从整段 Cookie 中自动提取 SESSDATA，记得点「保存设置」', 'ok');
 });
 
-/* SESSDATA 扫码登录 */
-const qrLogin = { key: '', timer: null, dead: false };
+/* SESSDATA 扫码登录；lastStatus 记录上一轮状态，用于区分「已扫码」后的失败 */
+const qrLogin = { key: '', timer: null, dead: false, lastStatus: '' };
 
 /* 转义 HTML 特殊字符（扫码状态区拼接用） */
 function escapeHtml(s) {
@@ -2640,6 +2640,7 @@ async function qrStart() {
   clearTimeout(qrLogin.timer);
   qrLogin.key = '';
   qrLogin.dead = false;
+  qrLogin.lastStatus = '';
   $('#qrLoginMask').hidden = false;
   $('#qrLoginImg').hidden = true;
   $('#qrLoginRefresh').hidden = true;
@@ -2671,10 +2672,20 @@ function qrPollLoop() {
       r = await api('/api/bili-qrcode/poll?qrcode_key='
         + encodeURIComponent(qrLogin.key));
     } catch (err) {
+      // 已经扫码之后再出错，多半是兑换凭证那一步没成，而二维码此时已被消费：
+      // 继续轮询只会拿到 B 站的 86038 并被显示成「二维码已过期」，所以停在这里如实提示。
+      if (qrLogin.lastStatus === 'scanned') {
+        qrStop();
+        qrSetStatus('登录已确认，但未取到凭证：' + escapeHtml(err.message)
+          + '<br>请点下方按钮重新获取二维码', 'err');
+        $('#qrLoginRefresh').hidden = false;
+        return;
+      }
       qrSetStatus('查询扫码状态失败，2 秒后重试…', 'warn');
       qrLogin.timer = setTimeout(qrPollLoop, 2000);
       return;
     }
+    qrLogin.lastStatus = r.status;
     if (r.status === 'success') {
       qrStop();
       qrSetStatus('✅ 扫码成功，SESSDATA 已自动填入', 'ok');
@@ -2692,6 +2703,12 @@ function qrPollLoop() {
     } else if (r.status === 'expired') {
       qrStop();
       qrSetStatus('二维码已过期，请点下方按钮刷新', 'err');
+      $('#qrLoginRefresh').hidden = false;
+      return;
+    } else if (r.status === 'error') {
+      qrStop();
+      qrSetStatus(escapeHtml(r.message || '获取登录凭证失败，请刷新二维码重试'),
+        'err');
       $('#qrLoginRefresh').hidden = false;
       return;
     }
