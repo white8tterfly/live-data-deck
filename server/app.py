@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from recorder import __version__ as app_version
 from recorder import analysis as analysis_mod
 from recorder import dedup as dedup_mod
 from recorder import highlights as highlights_mod
@@ -83,7 +84,7 @@ def create_app() -> FastAPI:
         finally:
             await mgr.shutdown()
 
-    app = FastAPI(title="B站直播弹幕录制器", version="1.5.1", lifespan=lifespan)
+    app = FastAPI(title="B站直播弹幕录制器", version=app_version, lifespan=lifespan)
 
     def mgr() -> RecorderManager:
         return app.state.mgr
