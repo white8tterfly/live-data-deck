@@ -18,6 +18,22 @@ $stageRoot = Join-Path $distDir "stage"
 $stage = Join-Path $stageRoot $pkgName
 $zip = Join-Path $distDir "$pkgName.zip"
 
+# 打包前把 packaging\version_info.txt 的四段版本号改成 -Version 传进来的值，
+# 免得 exe 属性里的版本号与 recorder\__init__.py 的 __version__ 各自漂移。
+# 调用时仍需人工保证 -Version 等于 __version__。
+$viPath = Join-Path $root "packaging\version_info.txt"
+$vi = [int[]]($Version -split '\.')
+if ($vi.Count -lt 2 -or $vi.Count -gt 4) { throw "版本号格式应为 x.y / x.y.z / x.y.z.w：$Version" }
+while ($vi.Count -lt 4) { $vi += 0 }
+$viTuple = "($($vi[0]), $($vi[1]), $($vi[2]), $($vi[3]))"
+$viText = Get-Content -Path $viPath -Raw -Encoding UTF8
+$viText = $viText -replace 'filevers=\([^)]*\)', "filevers=$viTuple"
+$viText = $viText -replace 'prodvers=\([^)]*\)', "prodvers=$viTuple"
+$viText = $viText -replace "StringStruct\(u'FileVersion', u'[^']*'\)", "StringStruct(u'FileVersion', u'$Version')"
+$viText = $viText -replace "StringStruct\(u'ProductVersion', u'[^']*'\)", "StringStruct(u'ProductVersion', u'$Version')"
+# 用无 BOM UTF-8 写回：PyInstaller 能正确解码中文，且避免每次打包都给文件加上 BOM 产生多余的 diff
+[System.IO.File]::WriteAllText($viPath, $viText, (New-Object System.Text.UTF8Encoding($false)))
+
 Write-Host "[1/5] PyInstaller 打包..." -ForegroundColor Cyan
 pyinstaller LiveDataDeck.spec --noconfirm --clean | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 失败" }

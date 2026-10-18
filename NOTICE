@@ -1,5 +1,5 @@
 Live Data Deck（直播数据舱）
-Copyright (c) 2026 Live Data Deck contributors
+Copyright (c) 2026 white8tterfly
 
 本项目基于 MIT 许可证发布，完整许可证文本见 LICENSE。
 This product includes software licensed under the MIT License (see LICENSE).
@@ -21,31 +21,45 @@ property of their respective owners and are used for referential purposes only.
 ────────────────────────────────────────────────────────────
 二、运行时第三方依赖 / Runtime Dependencies
 ────────────────────────────────────────────────────────────
-本项目不复制任何第三方源码，以下依赖通过 pip 安装，均为宽松型许可证：
+本项目不复制任何第三方源码，以下组件均以宽松型许可证发布，按各自条款使用：
 
+  一、项目直接依赖与其传递依赖
   httpx                 BSD-3-Clause
   httpcore              BSD-3-Clause
+  h11                   MIT
+  anyio                 MIT
+  sniffio               MIT OR Apache-2.0
+  idna                  BSD-3-Clause
+  certifi               MPL-2.0（仅为 Mozilla CA 根证书数据包，未修改）
+  typing_extensions     PSF-2.0
+  typing-inspection     MIT
   websockets            BSD-3-Clause
   FastAPI               MIT
   Starlette             BSD-3-Clause
   Uvicorn               BSD-3-Clause
-  python-dotenv         BSD-3-Clause
-  Pillow                MIT-CMU (HPND)
-  anyio                 MIT
-  sniffio               MIT OR Apache-2.0
-  h11                   MIT
-  idna                  BSD-3-Clause
   click                 BSD-3-Clause
-  typing_extensions     PSF-2.0
-  pydantic              MIT
-  annotated-types       MIT
-  watchfiles            MIT
+  colorama              BSD-3-Clause
   httptools             MIT
+  python-dotenv         BSD-3-Clause
   PyYAML                MIT
-  certifi               MPL-2.0（仅为 Mozilla CA 根证书数据包，未修改）
+  watchfiles            MIT
+  Pillow                MIT-CMU (HPND)
+  qrcode                BSD-3-Clause
+  pydantic              MIT
+  pydantic_core         MIT
+  annotated-types       MIT
 
-各依赖的完整许可证文本随其安装包分发，可在 Python 环境的
-site_metadata/<package>-.dist-info/LICENSE* 中查阅。
+  二、随包分发的其他运行时组件（非项目直接依赖，由打包器按依赖链收集）
+  attrs                 MIT
+  setuptools            MIT
+  zstandard             BSD-3-Clause
+  brotli                MIT
+  cffi                  MIT
+
+以上组件的许可证文本随各自发行包分发：绿色版 _internal 目录下附带了
+attrs / click / pydantic / websockets 四者的许可证副本，位于
+_internal/<包名>-<版本>.dist-info/licenses/ 内；其余组件未随包附带文本，
+可按上表所列名称到对应项目主页获取。
 
 ────────────────────────────────────────────────────────────
 三、构建与打包 / Build & Packaging

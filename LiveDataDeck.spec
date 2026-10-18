@@ -47,6 +47,8 @@ exe = EXE(
     upx=False,
     console=True,
     disable_windowed_traceback=False,
+    # 版本资源：打包进 exe 的产品名/版本/版权，版本号由 build_portable.ps1 按 -Version 覆写
+    version="packaging/version_info.txt",
 )
 coll = COLLECT(
     exe,
