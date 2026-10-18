@@ -197,6 +197,9 @@ async def record_room(rt: RoomRuntime, settings: Settings,
                     ws_url, ping_interval=None,
                     origin="https://live.bilibili.com",
                     user_agent_header=None,
+                    # 默认关闭握手要等对端回帧、超时才强关，B 站不回帧时任务取消会被
+                    # 卡满 10s（期间停录接口不返回）；压到 1s，正常关闭仍是毫秒级
+                    close_timeout=1,
                     additional_headers={
                         "User-Agent": P.HEADERS["User-Agent"],
                         "Cookie": session.ws_cookie_header(),
@@ -352,10 +355,13 @@ async def record_room(rt: RoomRuntime, settings: Settings,
         bus.log("info", f"[{rt.vup}] 录制任务已停止", rt.room_id)
         raise
     finally:
-        # 先停视频协程（它仍在使用 session 的 httpx client），再关 session
+        # 先停视频协程（它仍在使用 session 的 httpx client），再关 session。
+        # await 已取消的子任务会抛 CancelledError，它是 BaseException、suppress(Exception)
+        # 拦不住，会从 finally 里抛出去把后面的运行态复位与推送整段跳过（房间就一直卡在
+        # 「运行中」），故这里显式放行取消异常，保证收尾一定走到末尾
         if video_task and not video_task.done():
             video_task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await video_task
         rt.running = False
         rt.connected = False
