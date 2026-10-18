@@ -199,6 +199,9 @@ class RecorderManager:
         self.target_store.remove(room_id)
         self.runtimes.pop(room_id, None)
         self.bus.log("info", f"已删除房间 {room_id}")
+        # 删除后立即广播一次聚合状态：前端靠 state 快照重渲染房间表与仪表盘，
+        # 不发这条就得等下一个 5s 周期快照，页面表现为「删了要过几秒才消失」
+        self.bus.emit("state", self.snapshot())
 
     # 录制控制
     def is_running(self, room_id: int) -> bool:
