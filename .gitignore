@@ -30,11 +30,3 @@ Thumbs.db
 build/
 dist/
 
-# ===== 仅本地维护（不进公开仓库） =====
-# spec/、test_cases/、AGENTS.md 是开发过程资产，公开仓库不收录；
-# .trae/ 为代理/计划产物。以下均只在本地留存。
-/spec/
-/test_cases/
-/AGENTS.md
-.trae/
-
