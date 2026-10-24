@@ -438,7 +438,7 @@
       if (hl - gap - tw >= 0) return { x: hl - gap - tw, y: ht };
       return null;
     }
-    /* 按当前矩形重画挖孔；矩形可能被截短，故独立成函数以便二次调用 */
+    /* 按当前矩形重画挖孔；矩形可能被截短，故独立成函数供二次调用 */
     function drawHole(r) {
       hole.style.left = (r.left - pad) + 'px';
       hole.style.top = (r.top - pad) + 'px';
