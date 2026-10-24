@@ -1,0 +1,8 @@
+# 开发期测试依赖，与 requirements.txt（运行依赖）分开。
+# 不进绿色版打包链路：LiveDataDeck.spec 只收 recorder/、server/、web/，本文件不参与构建。
+pytest>=9.1
+
+# 说明：
+# - httpx 已在 requirements.txt 中（运行期就要），TestClient 复用它，这里不重复声明。
+# - 暂不引入 pytest-asyncio：现有用例全部走同步 TestClient 与纯函数，用不到异步夹具。
+# - 前端 e2e（L2）如选用 Playwright，届时单独加依赖并留意浏览器二进制体积，仍不进绿色版。
