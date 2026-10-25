@@ -47,6 +47,34 @@ Python 异步核心 + FastAPI + 原生 Web UI，
 > 人气值为 B 站加权人气指标，不等于真实在线人数；2026-10 前的历史录制文件无该字段，
 > 战报与分析会显示「无数据」，无法回填。
 
+## 界面预览
+
+> 截图取自开发环境的新手引导演示数据（虚拟主播与匿名观众），不含任何真实用户信息；
+> 界面为默认的深色主题。
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<img src="assets/screenshots/analysis.png" alt="数据分析页" width="100%"><br>
+<sub><b>数据分析</b>：勾选任意场次生成跨文件统计报告，含总览卡片、弹幕时间轴、24 小时与长度分布，以及高频弹幕 / 活跃用户 / SC 贡献榜。</sub>
+</td>
+<td width="50%" valign="top">
+<img src="assets/screenshots/highlights.png" alt="高能时间轴" width="100%"><br>
+<sub><b>高能时间轴</b>：弹幕密度、SC、人气斜率三信号加权的直播心电图，自动给出高能窗口，可复制播放器跳转命令或交给 AI 解读。</sub>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<img src="assets/screenshots/rooms.png" alt="房间管理页" width="100%"><br>
+<sub><b>房间管理</b>：按直播间号添加录制目标，弹幕录制、视频直录、开播提醒都可按房间单独开关。</sub>
+</td>
+<td width="50%" valign="top">
+<img src="assets/screenshots/settings.png" alt="设置页" width="100%"><br>
+<sub><b>设置</b>：凭证与录制策略分区管理，改动后统一保存，离开页面前会提示未保存内容。</sub>
+</td>
+</tr>
+</table>
+
 ## 快速开始（下载即用，推荐）
 
 无需安装 Python 或任何环境，只想直接用的话走这条路径：
