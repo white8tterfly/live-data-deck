@@ -68,6 +68,35 @@ def _console_is_ours() -> bool:
     return True
 
 
+def _enable_dpi_awareness() -> None:
+    """让进程按系统缩放在原生分辨率下绘制 Win32 界面。
+
+    绿色版 exe 没有 DPI 清单，125% / 150% 缩放下通知区域菜单会被系统位图拉伸，
+    文字发虚、边缘被裁。必须在进程创建任何窗口之前调用，所以放在 main() 第一行；
+    逐级回退：Win10 1703+ 的 Per-Monitor V2 → Win8.1 的 Per-Monitor → Vista 的
+    System 感知。哪一级都失败就静默跳过——菜单还能用，只是可能发虚，不能因此拖垮服务启动。
+    """
+    if os.name != "nt":
+        return
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 是 -4 的伪句柄，不是指针
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:   # PROCESS_PER_MONITOR_DPI_AWARE
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def _hide_console_window() -> None:
     """藏掉绿色版双击启动时那个黑色控制台窗口。
 
@@ -163,10 +192,32 @@ def _remove_tray_icon() -> None:
     _tray["added"] = False
 
 
+def _load_tray_icon(hinst):
+    """取通知区域用的图标：优先 exe 自带的品牌图标，实在没有才退回系统默认。
+
+    按 SM_CXSMICON 加载小图标资源，任务栏 16px 直接用 16px 那一档，
+    不像 LoadIcon 那样取 32px 让系统缩小、边缘发糊。
+    """
+    user32 = ctypes.windll.user32
+    user32.LoadImageW.restype = ctypes.c_void_p
+    user32.LoadIconW.restype = ctypes.c_void_p
+    cx = user32.GetSystemMetrics(49)                        # SM_CXSMICON
+    cy = user32.GetSystemMetrics(50)                        # SM_CYSMICON
+    hicon = user32.LoadImageW(hinst, ctypes.c_void_p(1), 1,  # 1 = IMAGE_ICON，ID 1 为 exe 主图标
+                              cx, cy, 0)
+    if not hicon:
+        hicon = user32.LoadImageW(hinst, ctypes.c_void_p(1), 1, 0, 0, 0x40)  # LR_DEFAULTSIZE
+    if not hicon:
+        hicon = user32.LoadIconW(None, ctypes.c_void_p(32512))               # IDI_APPLICATION
+    return hicon
+
+
 def _show_tray_menu(hwnd) -> None:
     """弹出托盘右键菜单。
 
     用 TPM_RETURNCMD 直接把选中项取回来，省掉把 WM_COMMAND 转发一遍的麻烦；
+    右对齐 + 底对齐让菜单从光标左上方展开，再叠加 TPM_WORKAREA 限制在屏幕工作区内，
+    任务栏贴着屏幕底边时菜单也不会被推出屏幕或被任务栏盖住。
     弹之前先抢前台窗口，否则点菜单外面菜单不会自动收起（Windows 的老规矩）。
     """
     user32 = ctypes.windll.user32
@@ -178,8 +229,9 @@ def _show_tray_menu(hwnd) -> None:
     pt = _POINT()
     user32.GetCursorPos(ctypes.byref(pt))
     user32.SetForegroundWindow(hwnd)
-    cmd = user32.TrackPopupMenu(menu, 0x0002 | 0x0100,      # RIGHTBUTTON | RETURNCMD
-                                pt.x, pt.y, 0, hwnd, None)
+    # RIGHTBUTTON | RETURNCMD | RIGHTALIGN | BOTTOMALIGN | WORKAREA
+    flags = 0x0002 | 0x0100 | 0x0008 | 0x0020 | 0x10000
+    cmd = user32.TrackPopupMenuEx(menu, flags, pt.x, pt.y, hwnd, None)
     user32.PostMessageW(hwnd, 0, 0, 0)
     user32.DestroyMenu(menu)
     if cmd == _TRAY_MENU_OPEN and _tray["open_url"]:
@@ -213,6 +265,10 @@ def _tray_loop(open_url: str, on_quit) -> None:
         user32.CreateWindowExW.restype = ctypes.c_void_p
         user32.CreatePopupMenu.restype = ctypes.c_void_p
         user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        # 必须声明参数类型：lParam 里有指针值，按默认 c_int 传会溢出报错，
+        # 消息处理直接返回 0，菜单消息也跟着一起坏掉
+        user32.DefWindowProcW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                          ctypes.c_size_t, ctypes.c_ssize_t]
         kernel32.GetModuleHandleW.restype = ctypes.c_void_p
 
         _tray["open_url"] = open_url
@@ -232,9 +288,9 @@ def _tray_loop(open_url: str, on_quit) -> None:
             return
         _tray["hwnd"] = hwnd
 
-        hicon = ctypes.c_void_p(user32.LoadIconW(hinst, ctypes.c_void_p(1)))
-        if not hicon:                                       # 取不到 exe 自带图标就退回系统默认图标
-            hicon = ctypes.c_void_p(user32.LoadIconW(None, ctypes.c_void_p(32512)))
+        hicon = _load_tray_icon(hinst)
+        if not hicon:
+            return
 
         nid = _NOTIFYICONDATAW()
         nid.cbSize = ctypes.sizeof(_NOTIFYICONDATAW)
@@ -282,6 +338,9 @@ def _register_shutdown_route(app, endpoint) -> None:
 
 def main() -> None:
     """解析命令行参数，拉起 uvicorn，按需延时自动开浏览器。"""
+    # 必须在任何窗口创建之前设置，托盘菜单才会按原生分辨率绘制
+    _enable_dpi_awareness()
+
     parser = argparse.ArgumentParser(description="B站直播弹幕录制器")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
